@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <vector>
 #include <optional>
 #include <span>
@@ -68,10 +69,14 @@ struct VaapiHevcDecodeParams {
 /// Sovereign VA-API VP9 Parameter Packet for GPU Decode submission
 struct VaapiVp9DecodeParams {
     VADecPictureParameterBufferVP9 pic_param{};
+    VASliceParameterBufferVP9 slice_param{};
+    bool has_slice{true};
 
     static VaapiVp9DecodeParams build(
         const Vp9UncompressedHeader& hdr,
-        uint32_t curr_surface
+        uint32_t curr_surface,
+        const std::array<uint32_t, 8>& ref_surfaces = {0, 0, 0, 0, 0, 0, 0, 0},
+        size_t slice_data_size = 0
     );
 };
 

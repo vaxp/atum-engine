@@ -22,7 +22,7 @@ void Vp9Decoder::init_hardware_pipeline(uint32_t width, uint32_t height) {
         auto cfg_res = va->create_config(CodecId::VP9);
         if (cfg_res.is_ok()) {
             hw_config_id_ = *cfg_res;
-            auto surf_res = va->create_surfaces(width, height, PixelFormat::NV12, 8);
+            auto surf_res = va->create_surfaces(width, height, PixelFormat::NV12, 16);
             if (surf_res.is_ok()) {
                 hw_surfaces_ = std::move(*surf_res);
                 auto ctx_res = va->create_context(hw_config_id_, width, height, hw_surfaces_);
@@ -62,6 +62,9 @@ MediaResult<void> Vp9Decoder::init(const CodecParameters& params) {
     params_.media_type = MediaType::Video;
     frame_count_ = 0;
     current_surface_idx_ = 0;
+    ref_surfaces_.fill(0xFFFFFFFF);
+    last_width_ = 0;
+    last_height_ = 0;
     dpb_.clear();
 
     hw_device_ = HwDevice::create_default();
@@ -87,14 +90,39 @@ MediaResult<void> Vp9Decoder::send_packet(const Packet& packet) {
         if (!subframe.header.has_value()) continue;
 
         const auto& hdr = *subframe.header;
+
+        // If this frame just displays an existing reference frame, output it without decoding
+        if (hdr.show_existing_frame) {
+            uint8_t ref_idx = hdr.frame_to_show_map_idx;
+            uint32_t surface_id = (ref_idx < 8) ? ref_surfaces_[ref_idx] : 0xFFFFFFFF;
+            if (surface_id != 0xFFFFFFFF && hw_device_ && hw_device_->type() == HwDeviceType::Vaapi) {
+                auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+                uint32_t w = (last_width_ > 0) ? last_width_ : params_.width;
+                uint32_t h = (last_height_ > 0) ? last_height_ : params_.height;
+                auto derived = va->derive_surface_to_frame(surface_id, w, h);
+                if (derived.is_ok()) {
+                    VideoFrame frame = std::move(*derived);
+                    frame.set_pts(packet.pts());
+                    frame.set_dts(packet.dts());
+                    frame.set_duration(packet.duration());
+                    frame.set_keyframe(false);
+                    ready_frames_.push(std::move(frame));
+                    frame_count_++;
+                }
+            }
+            continue;
+        }
+
         uint32_t w = hdr.width;
         uint32_t h = hdr.height;
-        if (w == 0) w = params_.width;
-        if (h == 0) h = params_.height;
+        if (w == 0) w = (last_width_ > 0) ? last_width_ : params_.width;
+        if (h == 0) h = (last_height_ > 0) ? last_height_ : params_.height;
 
         if (w > 0 && h > 0) {
             params_.width = w;
             params_.height = h;
+            last_width_ = w;
+            last_height_ = h;
 
             if (!hw_pipeline_initialized_) {
                 init_hardware_pipeline(w, h);
@@ -105,15 +133,36 @@ MediaResult<void> Vp9Decoder::send_packet(const Packet& packet) {
 
             if (hw_pipeline_initialized_ && !hw_surfaces_.empty() && hw_device_->type() == HwDeviceType::Vaapi) {
                 auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+
+                // Pick a surface that does not conflict with active reference frames
                 target_surface_id = hw_surfaces_[current_surface_idx_];
-                current_surface_idx_ = (current_surface_idx_ + 1) % hw_surfaces_.size();
+                for (size_t attempt = 0; attempt < hw_surfaces_.size(); ++attempt) {
+                    uint32_t cand = hw_surfaces_[(current_surface_idx_ + attempt) % hw_surfaces_.size()];
+                    bool in_refs = false;
+                    for (size_t i = 0; i < 8; ++i) {
+                        if (ref_surfaces_[i] != 0xFFFFFFFF && ref_surfaces_[i] == cand) {
+                            in_refs = true;
+                            break;
+                        }
+                    }
+                    if (!in_refs) {
+                        target_surface_id = cand;
+                        current_surface_idx_ = (current_surface_idx_ + attempt + 1) % hw_surfaces_.size();
+                        break;
+                    }
+                }
 
                 std::vector<uint32_t> buf_ids;
 
 #if defined(ATUM_HAS_VAAPI_HEADERS)
-                auto params = VaapiVp9DecodeParams::build(hdr, target_surface_id);
+                auto params = VaapiVp9DecodeParams::build(hdr, target_surface_id, ref_surfaces_, subframe.data.size());
                 auto pic_buf = va->create_buffer(hw_context_id_, 0 /* VAPictureParameterBufferType */, sizeof(params.pic_param), 1, &params.pic_param);
                 if (pic_buf.is_ok()) buf_ids.push_back(*pic_buf);
+
+                if (params.has_slice) {
+                    auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
+                    if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+                }
 #endif
                 auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(subframe.data.size()), 1, subframe.data.data());
                 if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
@@ -128,6 +177,17 @@ MediaResult<void> Vp9Decoder::send_packet(const Packet& packet) {
 
                 for (uint32_t b : buf_ids) {
                     va->destroy_buffer(b);
+                }
+
+                // Update VP9 reference frame surfaces table
+                if (hdr.is_keyframe()) {
+                    ref_surfaces_.fill(target_surface_id);
+                } else {
+                    for (size_t i = 0; i < 8; ++i) {
+                        if ((hdr.refresh_frame_flags & (1u << i)) != 0) {
+                            ref_surfaces_[i] = target_surface_id;
+                        }
+                    }
                 }
 
                 auto derived = va->derive_surface_to_frame(target_surface_id, w, h);
@@ -170,8 +230,10 @@ MediaResult<void> Vp9Decoder::send_packet(const Packet& packet) {
             }
             dpb_.insert(frame.clone(), frame_count_, frame_count_, hdr.is_keyframe());
 
-            ready_frames_.push(std::move(frame));
-            frame_count_++;
+            if (hdr.show_frame) {
+                ready_frames_.push(std::move(frame));
+                frame_count_++;
+            }
         }
     }
 
@@ -194,6 +256,9 @@ MediaResult<void> Vp9Decoder::reset() {
     dpb_.clear();
     frame_count_ = 0;
     current_surface_idx_ = 0;
+    ref_surfaces_.fill(0xFFFFFFFF);
+    last_width_ = 0;
+    last_height_ = 0;
     return {};
 }
 

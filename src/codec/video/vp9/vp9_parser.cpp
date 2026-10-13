@@ -41,8 +41,10 @@ MediaResult<std::vector<Vp9Subframe>> Vp9Parser::parse_packet(std::span<const ui
             std::span<const uint8_t> frame_span{packet_data.data() + current_frame_offset, frame_sz};
             Vp9Subframe sf{};
             sf.data = frame_span;
-            auto hdr_res = Vp9UncompressedHeader::parse_frame(frame_span);
+            auto hdr_res = Vp9UncompressedHeader::parse_frame(frame_span, width_, height_);
             if (hdr_res) {
+                if (hdr_res->width > 0) width_ = hdr_res->width;
+                if (hdr_res->height > 0) height_ = hdr_res->height;
                 sf.header = *hdr_res;
                 last_header_ = *hdr_res;
             }
@@ -52,8 +54,10 @@ MediaResult<std::vector<Vp9Subframe>> Vp9Parser::parse_packet(std::span<const ui
     } else {
         Vp9Subframe sf{};
         sf.data = packet_data;
-        auto hdr_res = Vp9UncompressedHeader::parse_frame(packet_data);
+        auto hdr_res = Vp9UncompressedHeader::parse_frame(packet_data, width_, height_);
         if (hdr_res) {
+            if (hdr_res->width > 0) width_ = hdr_res->width;
+            if (hdr_res->height > 0) height_ = hdr_res->height;
             sf.header = *hdr_res;
             last_header_ = *hdr_res;
         }

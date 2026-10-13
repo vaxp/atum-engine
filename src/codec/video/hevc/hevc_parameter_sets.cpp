@@ -113,18 +113,19 @@ MediaResult<HevcSps> HevcSps::parse(BitReader& reader) noexcept {
     uint32_t start_i = sps.sps_sub_layer_ordering_info_present_flag ? 0 : sps.sps_max_sub_layers_minus1;
     for (uint32_t i = start_i; i <= sps.sps_max_sub_layers_minus1; ++i) {
         auto dpb = reader.read_ue(); if (!dpb) return dpb.error();
+        sps.sps_max_dec_pic_buffering_minus1 = *dpb;
         auto reord = reader.read_ue(); if (!reord) return reord.error();
         auto lat = reader.read_ue(); if (!lat) return lat.error();
     }
 
     auto min_cb = reader.read_ue(); if (!min_cb) return min_cb.error(); sps.log2_min_luma_coding_block_size_minus3 = *min_cb;
     auto diff_cb = reader.read_ue(); if (!diff_cb) return diff_cb.error(); sps.log2_diff_max_min_luma_coding_block_size = *diff_cb;
-    auto min_tb = reader.read_ue(); if (!min_tb) return min_tb.error(); (void)min_tb;
-    auto diff_tb = reader.read_ue(); if (!diff_tb) return diff_tb.error(); (void)diff_tb;
-    auto max_depth_inter = reader.read_ue(); if (!max_depth_inter) return max_depth_inter.error(); (void)max_depth_inter;
-    auto max_depth_intra = reader.read_ue(); if (!max_depth_intra) return max_depth_intra.error(); (void)max_depth_intra;
+    auto min_tb = reader.read_ue(); if (!min_tb) return min_tb.error(); sps.log2_min_transform_block_size_minus2 = *min_tb;
+    auto diff_tb = reader.read_ue(); if (!diff_tb) return diff_tb.error(); sps.log2_diff_max_min_transform_block_size = *diff_tb;
+    auto max_depth_inter = reader.read_ue(); if (!max_depth_inter) return max_depth_inter.error(); sps.max_transform_hierarchy_depth_inter = *max_depth_inter;
+    auto max_depth_intra = reader.read_ue(); if (!max_depth_intra) return max_depth_intra.error(); sps.max_transform_hierarchy_depth_intra = *max_depth_intra;
 
-    auto scaling_en = reader.read_bit(); if (!scaling_en) return scaling_en.error();
+    auto scaling_en = reader.read_bit(); if (!scaling_en) return scaling_en.error(); sps.scaling_list_enabled_flag = (*scaling_en != 0);
     if (*scaling_en != 0) {
         auto scaling_present = reader.read_bit(); if (!scaling_present) return scaling_present.error();
         if (*scaling_present != 0) {
@@ -148,9 +149,9 @@ MediaResult<HevcSps> HevcSps::parse(BitReader& reader) noexcept {
         }
     }
 
-    auto amp = reader.read_bit(); if (!amp) return amp.error();
-    auto sao = reader.read_bit(); if (!sao) return sao.error();
-    auto pcm = reader.read_bit(); if (!pcm) return pcm.error();
+    auto amp = reader.read_bit(); if (!amp) return amp.error(); sps.amp_enabled_flag = (*amp != 0);
+    auto sao = reader.read_bit(); if (!sao) return sao.error(); sps.sample_adaptive_offset_enabled_flag = (*sao != 0);
+    auto pcm = reader.read_bit(); if (!pcm) return pcm.error(); sps.pcm_enabled_flag = (*pcm != 0);
     if (*pcm != 0) {
         auto sk = reader.skip_bits(8); if (!sk) return sk.error();
         auto min_pcm = reader.read_ue(); if (!min_pcm) return min_pcm.error();
@@ -158,7 +159,7 @@ MediaResult<HevcSps> HevcSps::parse(BitReader& reader) noexcept {
         auto loop_dis = reader.read_bit(); if (!loop_dis) return loop_dis.error();
     }
 
-    auto num_st = reader.read_ue(); if (!num_st) return num_st.error();
+    auto num_st = reader.read_ue(); if (!num_st) return num_st.error(); sps.num_short_term_ref_pic_sets = *num_st;
     // Parse short-term reference picture sets
     for (uint32_t st_idx = 0; st_idx < *num_st; ++st_idx) {
         bool inter_rps = false;
@@ -186,9 +187,9 @@ MediaResult<HevcSps> HevcSps::parse(BitReader& reader) noexcept {
     }
 
     if (reader.has_bits(1)) {
-        auto lt_present = reader.read_bit(); if (!lt_present) return lt_present.error();
-        if (*lt_present != 0) {
-            auto num_lt = reader.read_ue(); if (!num_lt) return num_lt.error();
+        auto lt_present = reader.read_bit(); if (!lt_present) return lt_present.error(); sps.long_term_ref_pics_present_flag = (*lt_present != 0);
+        if (sps.long_term_ref_pics_present_flag) {
+            auto num_lt = reader.read_ue(); if (!num_lt) return num_lt.error(); sps.num_long_term_ref_pics_sps = *num_lt;
             for (uint32_t i = 0; i < *num_lt; ++i) {
                 auto sk = reader.skip_bits(sps.log2_max_pic_order_cnt_lsb_minus4 + 4 + 1);
                 if (!sk) return sk.error();
@@ -197,8 +198,8 @@ MediaResult<HevcSps> HevcSps::parse(BitReader& reader) noexcept {
     }
 
     if (reader.has_bits(2)) {
-        auto tmvp = reader.read_bit(); if (!tmvp) return tmvp.error();
-        auto intra_smooth = reader.read_bit(); if (!intra_smooth) return intra_smooth.error();
+        auto tmvp = reader.read_bit(); if (!tmvp) return tmvp.error(); sps.sps_temporal_mvp_enabled_flag = (*tmvp != 0);
+        auto intra_smooth = reader.read_bit(); if (!intra_smooth) return intra_smooth.error(); sps.strong_intra_smoothing_enabled_flag = (*intra_smooth != 0);
     }
 
     if (reader.has_bits(1)) {
@@ -286,6 +287,7 @@ MediaResult<HevcPps> HevcPps::parse(BitReader& reader) noexcept {
     auto cu_qp = reader.read_bit(); if (!cu_qp) return cu_qp.error(); pps.cu_qp_delta_enabled_flag = (*cu_qp != 0);
     if (pps.cu_qp_delta_enabled_flag) {
         auto depth = reader.read_ue(); if (!depth) return depth.error();
+        pps.diff_cu_qp_delta_depth = *depth;
     }
 
     auto cb_qp = reader.read_se(); if (!cb_qp) return cb_qp.error(); pps.pps_cb_qp_offset = *cb_qp;
@@ -297,6 +299,67 @@ MediaResult<HevcPps> HevcPps::parse(BitReader& reader) noexcept {
     auto tq_by = reader.read_bit(); if (!tq_by) return tq_by.error(); pps.transquant_bypass_enabled_flag = (*tq_by != 0);
     auto tiles = reader.read_bit(); if (!tiles) return tiles.error(); pps.tiles_enabled_flag = (*tiles != 0);
     auto wpp = reader.read_bit(); if (!wpp) return wpp.error(); pps.entropy_coding_sync_enabled_flag = (*wpp != 0);
+
+    if (pps.tiles_enabled_flag) {
+        auto num_cols = reader.read_ue(); if (!num_cols) return num_cols.error(); pps.num_tile_columns_minus1 = *num_cols;
+        auto num_rows = reader.read_ue(); if (!num_rows) return num_rows.error(); pps.num_tile_rows_minus1 = *num_rows;
+        auto uniform = reader.read_bit(); if (!uniform) return uniform.error(); pps.uniform_spacing_flag = (*uniform != 0);
+        if (!pps.uniform_spacing_flag) {
+            for (uint32_t i = 0; i < pps.num_tile_columns_minus1; ++i) {
+                auto col_w = reader.read_ue(); if (!col_w) return col_w.error();
+            }
+            for (uint32_t i = 0; i < pps.num_tile_rows_minus1; ++i) {
+                auto row_h = reader.read_ue(); if (!row_h) return row_h.error();
+            }
+        }
+        auto loop_tiles = reader.read_bit(); if (!loop_tiles) return loop_tiles.error(); pps.loop_filter_across_tiles_enabled_flag = (*loop_tiles != 0);
+    }
+
+    if (reader.has_bits(1)) {
+        auto loop_slices = reader.read_bit(); if (!loop_slices) return loop_slices.error(); pps.pps_loop_filter_across_slices_enabled_flag = (*loop_slices != 0);
+    }
+    if (reader.has_bits(1)) {
+        auto deb_ctrl = reader.read_bit(); if (!deb_ctrl) return deb_ctrl.error(); pps.deblocking_filter_control_present_flag = (*deb_ctrl != 0);
+        if (pps.deblocking_filter_control_present_flag) {
+            auto deb_ov = reader.read_bit(); if (!deb_ov) return deb_ov.error(); pps.deblocking_filter_override_enabled_flag = (*deb_ov != 0);
+            auto deb_dis = reader.read_bit(); if (!deb_dis) return deb_dis.error(); pps.pps_deblocking_filter_disabled_flag = (*deb_dis != 0);
+            if (!pps.pps_deblocking_filter_disabled_flag) {
+                auto beta = reader.read_se(); if (!beta) return beta.error(); pps.pps_beta_offset_div2 = *beta;
+                auto tc = reader.read_se(); if (!tc) return tc.error(); pps.pps_tc_offset_div2 = *tc;
+            }
+        }
+    }
+    if (reader.has_bits(1)) {
+        auto scaling = reader.read_bit(); if (!scaling) return scaling.error(); pps.pps_scaling_list_data_present_flag = (*scaling != 0);
+        if (pps.pps_scaling_list_data_present_flag) {
+            for (size_t size_id = 0; size_id < 4; ++size_id) {
+                size_t step = (size_id == 3) ? 3 : 1;
+                for (size_t mat_id = 0; mat_id < 6; mat_id += step) {
+                    auto pred_flag = reader.read_bit(); if (!pred_flag) return pred_flag.error();
+                    if (*pred_flag == 0) {
+                        auto pred_idx = reader.read_ue(); if (!pred_idx) return pred_idx.error();
+                    } else {
+                        size_t coef_num = std::min(64, 1 << (4 + (static_cast<int>(size_id) << 1)));
+                        if (size_id > 1) {
+                            auto dc = reader.read_se(); if (!dc) return dc.error();
+                        }
+                        for (size_t c = 0; c < coef_num; ++c) {
+                            auto delta = reader.read_se(); if (!delta) return delta.error();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (reader.has_bits(1)) {
+        auto list_mod = reader.read_bit(); if (!list_mod) return list_mod.error(); pps.lists_modification_present_flag = (*list_mod != 0);
+    }
+    if (reader.has_bits(1)) {
+        auto par_merge = reader.read_ue(); if (!par_merge) return par_merge.error(); pps.log2_parallel_merge_level_minus2 = *par_merge;
+    }
+    if (reader.has_bits(1)) {
+        auto ext_present = reader.read_bit(); if (!ext_present) return ext_present.error(); pps.slice_segment_header_extension_present_flag = (*ext_present != 0);
+    }
 
     return pps;
 }

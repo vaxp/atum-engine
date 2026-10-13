@@ -89,6 +89,21 @@ struct HevcSps {
     bool sps_sub_layer_ordering_info_present_flag{false};
     uint32_t log2_min_luma_coding_block_size_minus3{0};
     uint32_t log2_diff_max_min_luma_coding_block_size{0};
+    uint32_t log2_min_transform_block_size_minus2{0};
+    uint32_t log2_diff_max_min_transform_block_size{0};
+    uint32_t max_transform_hierarchy_depth_inter{0};
+    uint32_t max_transform_hierarchy_depth_intra{0};
+    uint32_t sps_max_dec_pic_buffering_minus1{0};
+
+    bool scaling_list_enabled_flag{false};
+    bool amp_enabled_flag{false};
+    bool sample_adaptive_offset_enabled_flag{false};
+    bool pcm_enabled_flag{false};
+    uint32_t num_short_term_ref_pic_sets{0};
+    bool long_term_ref_pics_present_flag{false};
+    uint32_t num_long_term_ref_pics_sps{0};
+    bool sps_temporal_mvp_enabled_flag{false};
+    bool strong_intra_smoothing_enabled_flag{false};
 
     bool vui_parameters_present_flag{false};
     HevcVui vui;
@@ -141,6 +156,7 @@ struct HevcPps {
     bool constrained_intra_pred_flag{false};
     bool transform_skip_enabled_flag{false};
     bool cu_qp_delta_enabled_flag{false};
+    uint32_t diff_cu_qp_delta_depth{0};
     int32_t pps_cb_qp_offset{0};
     int32_t pps_cr_qp_offset{0};
     bool pps_slice_chroma_qp_offsets_present_flag{false};
@@ -149,6 +165,21 @@ struct HevcPps {
     bool transquant_bypass_enabled_flag{false};
     bool tiles_enabled_flag{false};
     bool entropy_coding_sync_enabled_flag{false};
+
+    uint32_t num_tile_columns_minus1{0};
+    uint32_t num_tile_rows_minus1{0};
+    bool uniform_spacing_flag{true};
+    bool loop_filter_across_tiles_enabled_flag{true};
+    bool pps_loop_filter_across_slices_enabled_flag{false};
+    bool deblocking_filter_control_present_flag{false};
+    bool deblocking_filter_override_enabled_flag{false};
+    bool pps_deblocking_filter_disabled_flag{false};
+    int32_t pps_beta_offset_div2{0};
+    int32_t pps_tc_offset_div2{0};
+    bool pps_scaling_list_data_present_flag{false};
+    bool lists_modification_present_flag{false};
+    uint32_t log2_parallel_merge_level_minus2{0};
+    bool slice_segment_header_extension_present_flag{false};
 
     static MediaResult<HevcPps> parse(BitReader& reader) noexcept;
     static MediaResult<HevcPps> parse_rbsp(std::span<const uint8_t> rbsp) noexcept;

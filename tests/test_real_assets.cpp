@@ -5,8 +5,8 @@
 #include <vector>
 #include <cmath>
 #include "atum/io/file_stream.hpp"
-#include "atum/container/isobmff_demuxer.hpp"
-#include "atum/codec/video/h264/h264_decoder.hpp"
+#include "atum/container/container_registry.hpp"
+#include "atum/codec/codec_registry.hpp"
 #include "atum/surface/color_convert.hpp"
 
 using namespace atum;
@@ -39,15 +39,40 @@ static bool save_frame_as_ppm(const VideoFrame& frame, const std::string& path) 
     }
 
     std::ofstream ofs(path, std::ios::binary);
-    if (!ofs.is_open()) return false;
+    if (!ofs) return false;
     ofs << "P6\n" << w << " " << h << "\n255\n";
-    for (size_t i = 0; i < w * h; ++i) {
-        ofs.put(static_cast<char>(rgba[i * 4 + 0]));
-        ofs.put(static_cast<char>(rgba[i * 4 + 1]));
-        ofs.put(static_cast<char>(rgba[i * 4 + 2]));
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* row = rgba.data() + (y * w * 4);
+        for (uint32_t x = 0; x < w; ++x) {
+            ofs.put(row[x * 4 + 0]);
+            ofs.put(row[x * 4 + 1]);
+            ofs.put(row[x * 4 + 2]);
+        }
     }
     return true;
 }
+
+#pragma pack(push, 1)
+struct BmpHeader {
+    uint16_t file_type{0x4D42}; // 'BM'
+    uint32_t file_size{0};
+    uint16_t reserved1{0};
+    uint16_t reserved2{0};
+    uint32_t offset_data{54};
+
+    uint32_t size{40};
+    int32_t width{0};
+    int32_t height{0};
+    uint16_t planes{1};
+    uint16_t bit_count{24};
+    uint32_t compression{0};
+    uint32_t size_image{0};
+    int32_t x_pixels_per_meter{0};
+    int32_t y_pixels_per_meter{0};
+    uint32_t colors_used{0};
+    uint32_t colors_important{0};
+};
+#pragma pack(pop)
 
 static bool save_frame_as_bmp(const VideoFrame& frame, const std::string& path) {
     if (!frame.is_valid()) return false;
@@ -76,47 +101,26 @@ static bool save_frame_as_bmp(const VideoFrame& frame, const std::string& path) 
         return false;
     }
 
-    uint32_t row_stride = ((w * 3 + 3) / 4) * 4;
+    uint32_t row_stride = (w * 3 + 3) & ~3;
     uint32_t image_size = row_stride * h;
-    uint32_t file_size = 54 + image_size;
 
-    std::vector<uint8_t> header(54, 0);
-    header[0] = 'B';
-    header[1] = 'M';
-    header[2] = static_cast<uint8_t>(file_size & 0xFF);
-    header[3] = static_cast<uint8_t>((file_size >> 8) & 0xFF);
-    header[4] = static_cast<uint8_t>((file_size >> 16) & 0xFF);
-    header[5] = static_cast<uint8_t>((file_size >> 24) & 0xFF);
-    header[10] = 54;
-    header[14] = 40;
-    header[18] = static_cast<uint8_t>(w & 0xFF);
-    header[19] = static_cast<uint8_t>((w >> 8) & 0xFF);
-    header[20] = static_cast<uint8_t>((w >> 16) & 0xFF);
-    header[21] = static_cast<uint8_t>((w >> 24) & 0xFF);
-
-    int32_t neg_h = -static_cast<int32_t>(h);
-    header[22] = static_cast<uint8_t>(neg_h & 0xFF);
-    header[23] = static_cast<uint8_t>((neg_h >> 8) & 0xFF);
-    header[24] = static_cast<uint8_t>((neg_h >> 16) & 0xFF);
-    header[25] = static_cast<uint8_t>((neg_h >> 24) & 0xFF);
-    header[26] = 1;
-    header[28] = 24;
-    header[34] = static_cast<uint8_t>(image_size & 0xFF);
-    header[35] = static_cast<uint8_t>((image_size >> 8) & 0xFF);
-    header[36] = static_cast<uint8_t>((image_size >> 16) & 0xFF);
-    header[37] = static_cast<uint8_t>((image_size >> 24) & 0xFF);
+    BmpHeader header;
+    header.file_size = 54 + image_size;
+    header.width = static_cast<int32_t>(w);
+    header.height = static_cast<int32_t>(h); // bottom-up BMP
+    header.size_image = image_size;
 
     std::ofstream ofs(path, std::ios::binary);
-    if (!ofs.is_open()) return false;
-    ofs.write(reinterpret_cast<const char*>(header.data()), 54);
+    if (!ofs) return false;
+    ofs.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
     std::vector<uint8_t> row_buf(row_stride, 0);
-    for (uint32_t y = 0; y < h; ++y) {
+    for (int32_t y = static_cast<int32_t>(h) - 1; y >= 0; --y) {
+        const uint8_t* row = rgba.data() + (y * w * 4);
         for (uint32_t x = 0; x < w; ++x) {
-            uint32_t rgba_idx = (y * w + x) * 4;
-            row_buf[x * 3 + 0] = rgba[rgba_idx + 2]; // B
-            row_buf[x * 3 + 1] = rgba[rgba_idx + 1]; // G
-            row_buf[x * 3 + 2] = rgba[rgba_idx + 0]; // R
+            row_buf[x * 3 + 0] = row[x * 4 + 2]; // B
+            row_buf[x * 3 + 1] = row[x * 4 + 1]; // G
+            row_buf[x * 3 + 2] = row[x * 4 + 0]; // R
         }
         ofs.write(reinterpret_cast<const char*>(row_buf.data()), row_stride);
     }
@@ -135,20 +139,20 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
     }
 
     auto reader = std::make_shared<FileReader>(std::move(*file_res));
-    IsoBmffDemuxer demuxer;
-    auto demux_res = demuxer.open(reader);
-    if (!demux_res.is_ok()) {
-        std::cerr << "Failed to parse MP4 container: " << media_error_to_string(demux_res.error()) << std::endl;
+    auto demuxer_res = ContainerRegistry::create_demuxer(reader);
+    if (!demuxer_res.is_ok()) {
+        std::cerr << "Failed to open container for " << filepath << ": " << media_error_to_string(demuxer_res.error()) << std::endl;
         return;
     }
+    auto demuxer = std::move(*demuxer_res);
 
     std::cout << "Container Opened Successfully!" << std::endl;
-    std::cout << "  Streams Found: " << demuxer.streams().size() << std::endl;
-    std::cout << "  Duration: " << demuxer.duration() << " us (" << (demuxer.duration() / 1000000.0) << " seconds)" << std::endl;
+    std::cout << "  Streams Found: " << demuxer->streams().size() << std::endl;
+    std::cout << "  Duration: " << demuxer->duration() << " us (" << (demuxer->duration() / 1000000.0) << " seconds)" << std::endl;
 
     int32_t video_stream_idx = -1;
-    for (size_t i = 0; i < demuxer.streams().size(); ++i) {
-        const auto& stream = demuxer.streams()[i];
+    for (size_t i = 0; i < demuxer->streams().size(); ++i) {
+        const auto& stream = demuxer->streams()[i];
         if (stream.codec_params.media_type == MediaType::Video) {
             video_stream_idx = static_cast<int32_t>(i);
             std::cout << "  [Video Stream " << i << "]: "
@@ -164,15 +168,20 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
         return;
     }
 
-    const auto& vstream = demuxer.streams()[video_stream_idx];
-    H264Decoder decoder;
-    auto dec_init = decoder.init(vstream.codec_params);
-    if (!dec_init.is_ok()) {
-        std::cerr << "Failed to initialize H264Decoder: " << media_error_to_string(dec_init.error()) << std::endl;
+    const auto& vstream = demuxer->streams()[video_stream_idx];
+    auto decoder = CodecRegistry::create_video_decoder(vstream.codec_params.codec_id);
+    if (!decoder) {
+        std::cerr << "No decoder found for: " << codec_id_to_string(vstream.codec_params.codec_id) << std::endl;
         return;
     }
 
-    std::cout << "  H264Decoder initialized. Starting Hardware Decode Loop..." << std::endl;
+    auto dec_init = decoder->init(vstream.codec_params);
+    if (!dec_init.is_ok()) {
+        std::cerr << "Failed to initialize decoder: " << media_error_to_string(dec_init.error()) << std::endl;
+        return;
+    }
+
+    std::cout << "  " << codec_id_to_string(vstream.codec_params.codec_id) << " Decoder initialized. Starting Hardware Decode Loop..." << std::endl;
 
     auto start_time = std::chrono::high_resolution_clock::now();
     uint32_t decoded_frames = 0;
@@ -181,13 +190,13 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
     uint32_t last_w = 0, last_h = 0;
 
     Packet pkt;
-    while (demuxer.read_packet(pkt).is_ok()) {
+    while (demuxer->read_packet(pkt).is_ok()) {
         if (pkt.stream_index() == video_stream_idx) {
             packet_count++;
-            auto send_res = decoder.send_packet(pkt);
+            auto send_res = decoder->send_packet(pkt);
             if (send_res.is_ok()) {
                 VideoFrame frame;
-                while (decoder.receive_frame(frame).is_ok()) {
+                while (decoder->receive_frame(frame).is_ok()) {
                     decoded_frames++;
                     if (frame.is_hw_frame()) hw_frames_count++;
                     last_w = frame.width();
@@ -203,7 +212,7 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
                             }
                         }
                     }
-                    double mean_luma = y_sum / (double)((last_w / 4) * (last_h / 4));
+                    double mean_luma = (last_w > 0 && last_h > 0) ? (y_sum / (double)((last_w / 4) * (last_h / 4))) : 0.0;
 
                     if (decoded_frames <= 3 || decoded_frames % 30 == 0) {
                         std::cout << "    [Frame #" << decoded_frames << "] "
@@ -250,7 +259,8 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
     std::cout << "\nDecoding Summary for " << filepath << ":" << std::endl;
     std::cout << "  Packets Read: " << packet_count << std::endl;
     std::cout << "  Frames Decoded: " << decoded_frames << std::endl;
-    std::cout << "  Hardware Accelerated GPU Frames: " << hw_frames_count << " / " << decoded_frames << " (100% GPU)" << std::endl;
+    std::cout << "  Hardware Accelerated GPU Frames: " << hw_frames_count << " / " << decoded_frames
+              << " (" << (decoded_frames > 0 ? (hw_frames_count * 100 / decoded_frames) : 0) << "% GPU)" << std::endl;
     std::cout << "  Resolution: " << last_w << "x" << last_h << std::endl;
     std::cout << "  Time Elapsed: " << elapsed_sec << " seconds" << std::endl;
     std::cout << "  Throughput: " << fps << " FPS" << std::endl;
@@ -261,9 +271,18 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
 }
 
 int main() {
-    std::cout << "=== Running Atum Sovereign Real Asset Hardware Decoding Verification ===" << std::endl;
+    std::cout << "=== Running Atum Sovereign Real Asset Multi-Codec Hardware Decoding Verification ===\n" << std::endl;
+
+    // 1. H.264 / AVC Real Assets
     test_video_file("assets/cyberpunk-hacker-android-wallpaperwaves-com.mp4", "cyberpunk", 60);
     test_video_file("assets/hunt-showdown-dark-ritual-skull-wallpaperwaves-com.mp4", "hunt", 60);
-    std::cout << "=== All Real Video Assets Decoded Successfully On GPU! ===" << std::endl;
+
+    // 2. H.265 / HEVC Real Asset
+    test_video_file("assets/big_buck_bunny_1080p_hevc.mp4", "hevc_bbb", 60);
+
+    // 3. VP9 Real Asset
+    test_video_file("assets/big_buck_bunny_1080p_vp9.webm", "vp9_bbb", 60);
+
+    std::cout << "=== All Real Video Assets (H.264, HEVC, VP9) Decoded Successfully On GPU! ===" << std::endl;
     return 0;
 }

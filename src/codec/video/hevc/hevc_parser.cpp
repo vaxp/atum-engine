@@ -106,7 +106,7 @@ MediaResult<void> HevcParser::parse_nal(std::span<const uint8_t> nal_data) {
         auto* pps = active_pps();
         if (sps && pps) {
             BitReader reader(rbsp);
-            auto res = HevcSliceHeader::parse(reader, hdr->nal_unit_type, *sps, *pps);
+            auto res = HevcSliceHeader::parse(reader, hdr->nal_unit_type, *sps, *pps, nal_data);
             if (res) {
                 if (res->slice_pic_parameter_set_id != pps->pps_pic_parameter_set_id) {
                     auto it = pps_map_.find(res->slice_pic_parameter_set_id);

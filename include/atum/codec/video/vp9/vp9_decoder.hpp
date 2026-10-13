@@ -2,6 +2,7 @@
 
 #include <queue>
 #include <memory>
+#include <array>
 #include <span>
 #include <vector>
 #include "atum/decode/decoder.hpp"
@@ -58,6 +59,9 @@ private:
     std::vector<uint32_t> hw_surfaces_;
     uint32_t current_surface_idx_{0};
     bool hw_pipeline_initialized_{false};
+    std::array<uint32_t, 8> ref_surfaces_{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+    uint32_t last_width_{0};
+    uint32_t last_height_{0};
 
     void init_hardware_pipeline(uint32_t width, uint32_t height);
     void release_hardware_pipeline();

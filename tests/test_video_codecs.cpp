@@ -342,6 +342,9 @@ void test_vp9_codec() {
     writer.write_bits(1280 - 1, 16); // width = 1280
     writer.write_bits(720 - 1, 16);  // height = 720
     writer.write_bit(0);           // render_and_frame_size_different = 0
+    writer.write_bit(1);           // refresh_frame_context = 1
+    writer.write_bit(1);           // frame_parallel_decoding_mode = 1
+    writer.write_bits(0, 2);       // frame_context_idx = 0
     // Loop filter & quantization
     writer.write_bits(10, 6);      // filter_level = 10
     writer.write_bits(2, 3);       // sharpness_level = 2

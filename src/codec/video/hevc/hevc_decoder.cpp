@@ -3,6 +3,7 @@
 #include <cstring>
 #include "atum/hwaccel/vaapi_device.hpp"
 #include "atum/hwaccel/vaapi_param_builder.hpp"
+#include <iostream>
 
 namespace atum {
 
@@ -22,7 +23,7 @@ void HevcDecoder::init_hardware_pipeline(uint32_t width, uint32_t height) {
         auto cfg_res = va->create_config(CodecId::H265);
         if (cfg_res.is_ok()) {
             hw_config_id_ = *cfg_res;
-            auto surf_res = va->create_surfaces(width, height, PixelFormat::NV12, 16);
+            auto surf_res = va->create_surfaces(width, height, PixelFormat::NV12, 32);
             if (surf_res.is_ok()) {
                 hw_surfaces_ = std::move(*surf_res);
                 auto ctx_res = va->create_context(hw_config_id_, width, height, hw_surfaces_);
@@ -94,6 +95,7 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
 
     auto data = packet.as_span();
 
+    std::vector<std::span<const uint8_t>> slice_nal_spans;
     if (is_hvcc_ && nal_length_size_ > 0) {
         size_t offset = 0;
         while (offset + nal_length_size_ <= data.size()) {
@@ -106,10 +108,25 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
 
             auto nal_span = data.subspan(offset, nal_len);
             (void)parser_.parse_nal(nal_span);
+            if (nal_span.size() >= 2) {
+                auto nal_type = static_cast<HevcNalType>((nal_span[0] >> 1) & 0x3F);
+                if (hevc_is_vcl_nal(nal_type)) {
+                    slice_nal_spans.push_back(nal_span);
+                }
+            }
             offset += nal_len;
         }
     } else {
-        (void)parser_.parse_annex_b(data);
+        auto nals = NalParser::split_annex_b(data);
+        for (const auto& nal : nals) {
+            (void)parser_.parse_nal(nal.payload);
+            if (nal.payload.size() >= 2) {
+                auto nal_type = static_cast<HevcNalType>((nal.payload[0] >> 1) & 0x3F);
+                if (hevc_is_vcl_nal(nal_type)) {
+                    slice_nal_spans.push_back(nal.payload);
+                }
+            }
+        }
     }
 
     uint32_t w = parser_.width();
@@ -125,6 +142,11 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
             init_hardware_pipeline(w, h);
         }
 
+        if (const auto* sps = parser_.active_sps()) {
+            size_t max_refs = sps->sps_max_dec_pic_buffering_minus1;
+            dpb_.set_max_ref_frames(max_refs > 0 ? max_refs + 1 : 5);
+        }
+
         VideoFrame frame;
         uint32_t target_surface_id = 0;
 
@@ -133,8 +155,24 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
 
         if (hw_pipeline_initialized_ && !hw_surfaces_.empty() && hw_device_->type() == HwDeviceType::Vaapi) {
             auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+
+            // Pick a surface that does not conflict with active reference frames in DPB
             target_surface_id = hw_surfaces_[current_surface_idx_];
-            current_surface_idx_ = (current_surface_idx_ + 1) % hw_surfaces_.size();
+            for (size_t attempt = 0; attempt < hw_surfaces_.size(); ++attempt) {
+                uint32_t cand = hw_surfaces_[(current_surface_idx_ + attempt) % hw_surfaces_.size()];
+                bool in_dpb = false;
+                for (const auto& entry : dpb_.entries()) {
+                    if (entry.frame.hw_surface_id() == cand) {
+                        in_dpb = true;
+                        break;
+                    }
+                }
+                if (!in_dpb) {
+                    target_surface_id = cand;
+                    current_surface_idx_ = (current_surface_idx_ + attempt + 1) % hw_surfaces_.size();
+                    break;
+                }
+            }
 
             std::vector<uint32_t> buf_ids;
             auto* sps = parser_.active_sps();
@@ -142,6 +180,7 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
 
 #if defined(ATUM_HAS_VAAPI_HEADERS)
             if (sps && pps) {
+                size_t first_slice_size = slice_nal_spans.empty() ? packet.size() : slice_nal_spans[0].size();
                 auto params = VaapiHevcDecodeParams::build(
                     *sps,
                     *pps,
@@ -149,21 +188,37 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
                     target_surface_id,
                     poc,
                     dpb_,
-                    packet.size()
+                    first_slice_size
                 );
 
                 auto pic_buf = va->create_buffer(hw_context_id_, 0 /* VAPictureParameterBufferType */, sizeof(params.pic_param), 1, &params.pic_param);
                 if (pic_buf.is_ok()) buf_ids.push_back(*pic_buf);
 
-                if (params.has_slice) {
-                    auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
-                    if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+                if (!slice_nal_spans.empty()) {
+                    for (const auto& slice_span : slice_nal_spans) {
+                        params.slice_param.slice_data_size = static_cast<uint32_t>(slice_span.size());
+                        params.slice_param.slice_data_offset = 0;
+                        params.slice_param.slice_data_flag = VA_SLICE_DATA_FLAG_ALL;
+                        if (parser_.last_slice_header().has_value()) {
+                            params.slice_param.slice_data_byte_offset = parser_.last_slice_header()->data_byte_offset;
+                        }
+
+                        auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
+                        if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+
+                        auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(slice_span.size()), 1, slice_span.data());
+                        if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
+                    }
+                } else {
+                    if (params.has_slice) {
+                        auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
+                        if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+                    }
+                    auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data());
+                    if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
                 }
             }
 #endif
-            // Slice data buffer (VASliceDataBufferType = 5)
-            auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data());
-            if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
 
             // Hardware Command Submission
             va->begin_picture(hw_context_id_, target_surface_id);
@@ -224,10 +279,17 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
             }
         }
 
+        bool is_ref = true;
+        if (parser_.last_slice_header().has_value()) {
+            is_ref = parser_.last_slice_header()->is_reference();
+        }
+
         if (is_key) {
             dpb_.clear();
         }
-        dpb_.insert(frame.clone(), poc, frame_count_, is_key);
+        if (is_ref) {
+            dpb_.insert(frame.clone(), poc, frame_count_, is_key);
+        }
 
         ready_frames_.push(std::move(frame));
         frame_count_++;

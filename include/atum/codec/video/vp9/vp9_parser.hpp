@@ -30,19 +30,23 @@ public:
     }
 
     [[nodiscard]] uint32_t width() const noexcept {
-        return last_header_.has_value() ? last_header_->width : 0;
+        return width_ > 0 ? width_ : (last_header_.has_value() ? last_header_->width : 0);
     }
 
     [[nodiscard]] uint32_t height() const noexcept {
-        return last_header_.has_value() ? last_header_->height : 0;
+        return height_ > 0 ? height_ : (last_header_.has_value() ? last_header_->height : 0);
     }
 
     void reset() noexcept {
         last_header_.reset();
+        width_ = 0;
+        height_ = 0;
     }
 
 private:
     std::optional<Vp9UncompressedHeader> last_header_;
+    uint32_t width_{0};
+    uint32_t height_{0};
 };
 
 } // namespace atum
