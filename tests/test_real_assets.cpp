@@ -8,123 +8,13 @@
 #include "atum/container/container_registry.hpp"
 #include "atum/codec/codec_registry.hpp"
 #include "atum/surface/color_convert.hpp"
+#include "atum/surface/image_export.hpp"
 
 using namespace atum;
 
-static bool save_frame_as_ppm(const VideoFrame& frame, const std::string& path) {
-    if (!frame.is_valid()) return false;
-    uint32_t w = frame.width();
-    uint32_t h = frame.height();
-    std::vector<uint8_t> rgba(w * h * 4);
-
-    if (frame.pixel_format() == PixelFormat::NV12) {
-        ColorConverter::nv12_to_rgba(
-            frame.plane(0), frame.stride(0),
-            frame.plane(1), frame.stride(1),
-            rgba.data(), w * 4,
-            w, h,
-            frame.color_space(), frame.color_range()
-        );
-    } else if (frame.pixel_format() == PixelFormat::YUV420P) {
-        ColorConverter::yuv420p_to_rgba(
-            frame.plane(0), frame.stride(0),
-            frame.plane(1), frame.stride(1),
-            frame.plane(2), frame.stride(2),
-            rgba.data(), w * 4,
-            w, h,
-            frame.color_space(), frame.color_range()
-        );
-    } else {
-        return false;
-    }
-
-    std::ofstream ofs(path, std::ios::binary);
-    if (!ofs) return false;
-    ofs << "P6\n" << w << " " << h << "\n255\n";
-    for (uint32_t y = 0; y < h; ++y) {
-        const uint8_t* row = rgba.data() + (y * w * 4);
-        for (uint32_t x = 0; x < w; ++x) {
-            ofs.put(row[x * 4 + 0]);
-            ofs.put(row[x * 4 + 1]);
-            ofs.put(row[x * 4 + 2]);
-        }
-    }
-    return true;
-}
-
-#pragma pack(push, 1)
-struct BmpHeader {
-    uint16_t file_type{0x4D42}; // 'BM'
-    uint32_t file_size{0};
-    uint16_t reserved1{0};
-    uint16_t reserved2{0};
-    uint32_t offset_data{54};
-
-    uint32_t size{40};
-    int32_t width{0};
-    int32_t height{0};
-    uint16_t planes{1};
-    uint16_t bit_count{24};
-    uint32_t compression{0};
-    uint32_t size_image{0};
-    int32_t x_pixels_per_meter{0};
-    int32_t y_pixels_per_meter{0};
-    uint32_t colors_used{0};
-    uint32_t colors_important{0};
-};
-#pragma pack(pop)
-
-static bool save_frame_as_bmp(const VideoFrame& frame, const std::string& path) {
-    if (!frame.is_valid()) return false;
-    uint32_t w = frame.width();
-    uint32_t h = frame.height();
-    std::vector<uint8_t> rgba(w * h * 4);
-
-    if (frame.pixel_format() == PixelFormat::NV12) {
-        ColorConverter::nv12_to_rgba(
-            frame.plane(0), frame.stride(0),
-            frame.plane(1), frame.stride(1),
-            rgba.data(), w * 4,
-            w, h,
-            frame.color_space(), frame.color_range()
-        );
-    } else if (frame.pixel_format() == PixelFormat::YUV420P) {
-        ColorConverter::yuv420p_to_rgba(
-            frame.plane(0), frame.stride(0),
-            frame.plane(1), frame.stride(1),
-            frame.plane(2), frame.stride(2),
-            rgba.data(), w * 4,
-            w, h,
-            frame.color_space(), frame.color_range()
-        );
-    } else {
-        return false;
-    }
-
-    uint32_t row_stride = (w * 3 + 3) & ~3;
-    uint32_t image_size = row_stride * h;
-
-    BmpHeader header;
-    header.file_size = 54 + image_size;
-    header.width = static_cast<int32_t>(w);
-    header.height = static_cast<int32_t>(h); // bottom-up BMP
-    header.size_image = image_size;
-
-    std::ofstream ofs(path, std::ios::binary);
-    if (!ofs) return false;
-    ofs.write(reinterpret_cast<const char*>(&header), sizeof(header));
-
-    std::vector<uint8_t> row_buf(row_stride, 0);
-    for (int32_t y = static_cast<int32_t>(h) - 1; y >= 0; --y) {
-        const uint8_t* row = rgba.data() + (y * w * 4);
-        for (uint32_t x = 0; x < w; ++x) {
-            row_buf[x * 3 + 0] = row[x * 4 + 2]; // B
-            row_buf[x * 3 + 1] = row[x * 4 + 1]; // G
-            row_buf[x * 3 + 2] = row[x * 4 + 0]; // R
-        }
-        ofs.write(reinterpret_cast<const char*>(row_buf.data()), row_stride);
-    }
-    return true;
+static bool save_frame_as_png(const VideoFrame& frame, const std::string& path) {
+    auto res = frame.save_png(path);
+    return res.is_ok();
 }
 
 void test_video_file(const std::string& filepath, const std::string& prefix, uint32_t max_frames_to_decode = 120) {
@@ -226,22 +116,14 @@ void test_video_file(const std::string& filepath, const std::string& prefix, uin
 
                     // Export first frame and 30th frame for visual verification
                     if (decoded_frames == 1) {
-                        std::string ppm_path = "assets/" + prefix + "_frame_1.ppm";
-                        std::string bmp_path = "assets/" + prefix + "_frame_1.bmp";
-                        if (save_frame_as_ppm(frame, ppm_path)) {
-                            std::cout << "      --> Exported visual frame to: " << ppm_path << std::endl;
-                        }
-                        if (save_frame_as_bmp(frame, bmp_path)) {
-                            std::cout << "      --> Exported visual frame to: " << bmp_path << std::endl;
+                        std::string png_path = "assets/" + prefix + "_frame_1.png";
+                        if (save_frame_as_png(frame, png_path)) {
+                            std::cout << "      --> Exported visual frame to: " << png_path << std::endl;
                         }
                     } else if (decoded_frames == 30) {
-                        std::string ppm_path = "assets/" + prefix + "_frame_30.ppm";
-                        std::string bmp_path = "assets/" + prefix + "_frame_30.bmp";
-                        if (save_frame_as_ppm(frame, ppm_path)) {
-                            std::cout << "      --> Exported visual frame to: " << ppm_path << std::endl;
-                        }
-                        if (save_frame_as_bmp(frame, bmp_path)) {
-                            std::cout << "      --> Exported visual frame to: " << bmp_path << std::endl;
+                        std::string png_path = "assets/" + prefix + "_frame_30.png";
+                        if (save_frame_as_png(frame, png_path)) {
+                            std::cout << "      --> Exported visual frame to: " << png_path << std::endl;
                         }
                     }
 

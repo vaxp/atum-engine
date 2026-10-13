@@ -1,7 +1,7 @@
 # Atum Media Engine
 
 > **Sovereign, Exclusively Hardware-Accelerated Multimedia Processing Engine**  
-> *Written in pure C++20 for high-performance zero-copy hardware video decoding (VA-API / DRM DMA-BUF), sovereign audio decoding, container multiplexing, HDR color science, and multicore DAG scheduling.*
+> *Engineered in pure C++20 for high-performance zero-copy hardware video decoding & encoding (VA-API / DRM DMA-BUF), direct Vulkan & OpenGL GPU interop, sovereign audio decoding, container multiplexing, HDR color science, and multicore DAG scheduling.*
 
 > [!WARNING]
 > **Active Development / Experimental Status**: This project is under **active development (Work in Progress)**, remains in an **experimental stage**, and is **incomplete**. APIs, data structures, and architectural interfaces are subject to ongoing refinements and breaking changes.
@@ -10,69 +10,91 @@
 
 ## 1. Overview & Current Status
 
-**Atum** is a comprehensive, sovereign **Multimedia Processing Engine** engineered from the ground up in modern **C++20** with **zero external dependencies** (no linking against FFmpeg, libavcodec, libavformat, etc.).
-
-Named after the ancient Egyptian concept of completeness, totality, and primordial self-creation (*"The Complete One"*), **Atum** is designed as a sovereign replacement for FFmpeg, customized specifically for embedded SoCs and sovereign systems where CPU software decoding is inadequate and hardware acceleration is paramount.
+**Atum** is a comprehensive, sovereign **Multimedia Processing Engine** engineered from the ground up in modern **C++20**. It is tailored specifically for high-performance embedded systems, media appliances, and sovereign environments where CPU software decoding is inadequate and dedicated GPU/VPU hardware acceleration is paramount.
 
 ### Sovereign Hardware-Accelerated Architecture
-* **Pure Hardware Pipeline (No CPU Fallback Bottlenecks)**: Video decoding and encoding operate exclusively via the GPU/VPU hardware acceleration pipeline (VA-API runtime dynamic loading with DRM DMA-BUF zero-copy surface export). Pure software pixel decoding (IDCT, macroblock reconstruction, inloop deblocking, and software CABAC/CAVLC pixel crunching) has been completely excised to ensure maximum energy efficiency and high throughput on low-power host processors.
-* **Sovereign Clean-Room Parameter Builders**: Dedicated, independent translation layer that maps Atum's native bitstream parsing headers into hardware execution structures (H.264, HEVC, VP9, AV1) without any third-party code contamination or legal liabilities.
+* **Pure Hardware Pipeline**: Video decoding and encoding operate exclusively via the GPU/VPU hardware acceleration pipeline (VA-API runtime dynamic loading with DRM DMA-BUF zero-copy surface export). Pure software pixel decoding has been completely excised to ensure maximum energy efficiency and high throughput on host processors.
+* **Direct GPU Interoperability (Vulkan & OpenGL)**: First-class zero-copy GPU integration surfaces allowing decoded video frames to be directly imported into Vulkan textures (`VkImage` via `VkSamplerYcbcrConversion`) and OpenGL textures (`EGLImage` via `GL_TEXTURE_EXTERNAL_OES`) without CPU readbacks or memory copies.
+* **Sovereign Image Export & Validation**: Seamlessly integrated with the **Nisaba** image engine (`libnisaba.so`) for native, high-speed PNG image encoding directly from engine video frames for visual inspection and regression testing.
+* **Sovereign Clean-Room Parameter Builders**: Dedicated, independent translation layer that maps native bitstream parsing headers into hardware execution structures (H.264, HEVC, VP9, AV1).
 * **Native Hardware Video Encoder**: Direct GPU hardware video encoding (`VaapiEncoder`) supporting H.264/HEVC with configurable GOP structures, IDR periods, CABAC, and zero-allocation GPU surface recycling (`HwSurfacePool`).
-* **Streamlined Core**: All extraneous networking and RTP streaming modules have been permanently removed to minimize attack surface and binary footprint.
-* **Abstracted Integration Bridges**: Integration surfaces with external rendering contexts and GUI surfaces are guarded through zero-copy buffer descriptors (`dma_buf_fd()`, `hw_surface_id()`).
-* **Build & Validation Health**: The engine compiles cleanly as both shared (`.so`) and static (`.a`) libraries via Meson and Ninja. All **28 automated test suites pass with a 100% pass rate**.
+* **Streamlined Core**: All extraneous networking and RTP streaming modules have been excised to minimize attack surface and binary footprint.
+* **Build & Validation Health**: The engine compiles cleanly as both shared (`.so`) and static (`.a`) libraries via Meson and Ninja. All **33 automated test suites pass with a 100% pass rate**.
 
 ---
 
 ## 2. Key Architectural Pillars
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                      ATUM MEDIA ENGINE ARCHITECTURE                    │
-├────────────────────────────────────────────────────────────────────────┤
-│  [Containers]            ISOBMFF (MP4) │ Matroska (MKV) │ TS │ IVF │ WAV│
-├────────────────────────────────────────────────────────────────────────┤
-│  [Hardware Video]        VA-API │ DRM DMA-BUF Zero-Copy Export         │
-│  [Bitstream Parsers]     H.264/AVC │ HEVC/H.265 │ VP9 │ AV1 │ QOI Video│
-├────────────────────────────────────────────────────────────────────────┤
-│  [Audio Decoders]        AAC-LC │ Opus (CELT/Silk) │ FLAC │ PCM        │
-│  [Audio Processing]      High-Precision Resampler │ A/V Clock Sync     │
-├────────────────────────────────────────────────────────────────────────┤
-│  [Color & HDR Science]   BT.709 / BT.2020 / DCI-P3 │ PQ / HLG │ ACES TM │
-├────────────────────────────────────────────────────────────────────────┤
-│  [Parallelism]           ThreadPool │ Frame Dependency Graph (DAG)     │
-├────────────────────────────────────────────────────────────────────────┤
-│  [Resilience Engine]     Error Mask │ Spatial/Temporal Concealment     │
-│                          Resilient NAL Parser & Resync Hunting         │
-└────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                          ATUM MEDIA ENGINE ARCHITECTURE                        │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [Containers]            ISOBMFF (MP4) │ Matroska (MKV) │ TS │ IVF │ WAV       │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [Hardware Video]        VA-API │ DRM DMA-BUF Zero-Copy Surface Export         │
+│  [Bitstream Parsers]     H.264/AVC │ HEVC/H.265 │ VP9 │ AV1 │ QOI Video        │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [GPU Interop & Render]  Vulkan (YCbCr Samplers / DMA-BUF) │ OpenGL / EGL      │
+│  [Image Export]          Nisaba Image Engine Integration (Native PNG)          │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [Audio Decoders]        AAC-LC │ Opus (CELT) │ FLAC │ PCM                     │
+│  [Audio Processing]      High-Precision Resampler │ A/V Clock Sync             │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [Color & HDR Science]   BT.709 / BT.2020 / DCI-P3 │ PQ / HLG │ ACES TM        │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [Parallelism]           ThreadPool │ Frame Dependency Graph (DAG)             │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  [Resilience Engine]     Error Mask │ Spatial/Temporal Concealment             │
+│                          Resilient NAL Parser & Resync Hunting                 │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 3. Subsystem Capabilities
 
-### A. Video Codecs (Exclusively Hardware Accelerated)
+### A. Hardware Video Acceleration & GPU Interoperability
+* **VA-API & DRM DMA-BUF**:
+  - Direct hardware video decoding contexts supporting H.264, HEVC, VP9, and AV1.
+  - Zero-copy DMA-BUF file descriptor export (`dma_buf_fd()`) with format modifiers and multi-planar stride/offset descriptors.
+  - Hardware video encoding (`VaapiEncoder`) with surface recycling pools (`HwSurfacePool`).
+* **Vulkan Zero-Copy Interoperability (`atum::vk`)**:
+  - Runtime dynamic dispatcher (`VulkanDispatcher`) supporting Vulkan 1.2+ without compile-time SDK lock-in.
+  - Direct zero-copy importation of DMA-BUF file descriptors into `VkImage` surfaces (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT`).
+  - Native support for multi-planar `NV12` sampling using Vulkan YCbCr conversion samplers (`VkSamplerYcbcrConversion`).
+  - Robust layout handling and detiling for hardware formats (e.g., Intel Y-Tiling).
+  - Vulkan Video Session and Decoder scaffolding for emerging Vulkan Video extensions.
+* **OpenGL / EGL Interoperability (`atum::gl`)**:
+  - Headless EGL context creation and dynamic GL dispatch (`GLDispatcher`).
+  - Zero-copy DMA-BUF importation via `EGLImageKHR` (`EGL_LINUX_DMA_BUF_EXT`).
+  - Sampling via `GL_TEXTURE_EXTERNAL_OES` and native 2D textures (`GLTexture`).
+  - Off-screen Framebuffer Object (FBO) rendering pipeline (`GLRenderer`) for color conversion and readback.
+* **Nisaba Image Export Engine Integration**:
+  - Native integration with the sovereign `nisaba` image engine (`libnisaba.so`).
+  - High-performance, lossless PNG export directly from `VideoFrame` instances for visual verification and testing.
+
+---
+
+### B. Bitstream Parsers & Video Codecs
 * **H.264 / AVC**:
   - SPS, PPS, and Slice header parsing with full VUI parameter and timing extraction.
-  - Native VA-API hardware context configuration, surface allocation, and picture rendering.
-  - Zero-copy DMA-BUF file descriptor export for direct zero-copy composition.
-  - Resilient NAL parsing with garbage resync hunting.
+  - Native hardware context configuration and Decoded Picture Buffer (DPB) reference management.
+  - Resilient NAL parsing with automatic garbage resynchronization.
 * **HEVC / H.265**:
   - Main Profile and Parameter Set parsing (VPS, SPS, PPS) with conformance cropping window support.
-  - Direct VA-API hardware decode pipeline and reference frame tracking via Decoded Picture Buffer (DPB).
+  - Hardware decode pipeline with DPB reference index mapping.
 * **VP9**:
   - Superframe unpacking and uncompressed header parsing (Profile 0/2, BT.709, BT.2020, BT.601, SMPTE170).
   - Direct hardware VA-API decode context and surface management.
 * **AV1**:
   - Open Bitstream Unit (OBU) parsing with LEB128 variable-length integer decoding.
   - Sequence Header and Frame Header inspection with color description extraction.
-  - Hardware acceleration probing and surface export.
 * **QOI Video**:
   - Lightweight, lossless frame compression for instantaneous local caching.
 
 ---
 
-### B. Audio Codecs & Processing
+### C. Audio Codecs & Processing
 * **AAC-LC Decoder**:
   - Direct Audio Data Transport Stream (ADTS) sync-word detection and framing.
   - Huffman entropy decoding with scalefactor band reconstruction.
@@ -90,7 +112,7 @@ Named after the ancient Egyptian concept of completeness, totality, and primordi
 
 ---
 
-### C. Container Multiplexers & Demuxers
+### D. Container Multiplexers & Demuxers
 * **ISOBMFF (MP4 / MOV)**:
   - Reading and writing standard box structures (`ftyp`, `moov`, `mvhd`, `trak`, `mdia`, `minf`, `stbl`, `stts`, `stsc`, `stsz`, `stco`, `mdat`).
   - Fast index generation and seek tables.
@@ -105,7 +127,7 @@ Named after the ancient Egyptian concept of completeness, totality, and primordi
 
 ---
 
-### D. Color Science, HDR & Mastering
+### E. Color Science, HDR & Mastering
 * **Color Primaries & Gamuts**:
   - Precision $3 \times 3$ floating-point conversion matrices between ITU-R BT.709, DCI-P3, and ITU-R BT.2020.
 * **Transfer Functions (OETF / EOTF)**:
@@ -122,7 +144,7 @@ Named after the ancient Egyptian concept of completeness, totality, and primordi
 
 ---
 
-### E. Parallelism & Multicore Architecture
+### F. Parallelism & Multicore Architecture
 * **Worker Thread Pool**:
   - Low-latency multi-threaded task dispatcher with prioritized work queues.
 * **Frame Dependency Graph (DAG)**:
@@ -130,7 +152,7 @@ Named after the ancient Egyptian concept of completeness, totality, and primordi
 
 ---
 
-### F. Bitstream Resilience & Error Concealment
+### G. Bitstream Resilience & Error Concealment
 * **Resilient NAL Parser**:
   - Self-healing bitstream scanner that skips corrupt data chunks and resynchronizes on subsequent start codes (`0x000001` / `0x00000001`).
 * **Error Concealment Mask**:
@@ -153,13 +175,13 @@ meson setup build
 # 2. Compile the library and test targets
 ninja -C build
 
-# 3. Execute all 28 unit and integration test suites
+# 3. Execute all 33 unit and integration test suites
 meson test -C build --verbose
 ```
 
 ### Test Suite Summary
 ```text
-Ok:                 28  
+Ok:                 33  
 Expected Fail:      0   
 Fail:               0   
 Skipped:            0   
@@ -179,22 +201,33 @@ Skipped:            0
 │   ├── color/                  # Color gamuts, transfer functions, and tone mapping
 │   ├── container/              # Demuxers, muxers, and container registry
 │   ├── core/                   # Packets, frames, and core media primitives
-│   ├── hwaccel/                # Hardware acceleration device abstractions (VA-API, DRM)
+│   ├── decode/                 # Video and audio decoders
+│   ├── encode/                 # Video and audio encoders
+│   ├── hwaccel/                # Hardware acceleration & GPU interop
+│   │   ├── opengl/             # EGL context, GL image importer, renderer & textures
+│   │   └── vulkan/             # Vulkan device, image importer, YCbCr samplers & video decoder
+│   ├── io/                     # Memory and file stream abstractions
 │   ├── parallel/               # Thread pool and Frame DAG scheduler
 │   ├── predict/                # Decoded Picture Buffer (DPB) management
 │   ├── resilience/             # Error masks and spatial/temporal concealment
-│   └── surface/                # Video frame surfaces and color conversion
+│   └── surface/                # Video frames, color conversion & image export (Nisaba)
 ├── src/                        # Implementation sources
-├── tests/                      # Automated test suite (28 test binaries)
-├── reference/                  # Architectural references
-│   └── ffmpeg_hwaccel/         # Upstream FFmpeg hardware acceleration source code reference
+├── tests/                      # Automated test suite (33 test binaries)
+├── assets/                     # Verification test video assets & visual exports
 ├── meson.build                 # Unified build configuration
 └── README.md                   # Project documentation
 ```
 
 ---
 
-## 6. Next Steps & Development Roadmap
+## 6. Authorship & Maintainers
 
-1. **Vulkan Video Acceleration**: Expand hardware backend to support Vulkan Video decode extensions alongside VA-API.
-2. **Direct DRM KMS Display Integration**: Direct plane submission from exported DMA-BUF descriptors to kernel modesetting.
+Architected and developed with pride by the **VAXP Organization** team.
+
+---
+
+## 7. License
+
+This project is licensed under the **Apache License, Version 2.0** (Apache-2.0).  
+See the [LICENSE](LICENSE) file for complete terms and conditions.
+

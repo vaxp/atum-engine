@@ -19,6 +19,7 @@ atum_media_sources = files(
   'src/io/file_stream.cpp',
   'src/surface/video_frame.cpp',
   'src/surface/color_convert.cpp',
+  'src/surface/image_export.cpp',
   'src/audio/audio_frame.cpp',
   'src/audio/audio_resampler.cpp',
   'src/codec/codec_registry.cpp',
@@ -85,20 +86,27 @@ atum_media_sources = files(
   'src/hwaccel/vulkan/vulkan_image_importer.cpp',
   'src/hwaccel/vulkan/vulkan_video_session.cpp',
   'src/hwaccel/vulkan/vulkan_video_decoder.cpp',
+  'src/hwaccel/opengl/gl_dispatcher.cpp',
+  'src/hwaccel/opengl/egl_context.cpp',
+  'src/hwaccel/opengl/gl_texture.cpp',
+  'src/hwaccel/opengl/gl_image_importer.cpp',
+  'src/hwaccel/opengl/gl_renderer.cpp',
+  'src/hwaccel/opengl/gl_device.cpp',
 )
 
 dl_dep = meson.get_compiler('cpp').find_library('dl', required : false)
+nisaba_dep = dependency('nisaba', required : true)
 
 atum_media_lib = both_libraries('atum_media',
   atum_media_sources,
   include_directories : atum_media_inc,
-  dependencies : dl_dep,
+  dependencies : [dl_dep, nisaba_dep],
   install : true
 )
 
 atum_media_dep = declare_dependency(
   include_directories : atum_media_inc,
-  dependencies : dl_dep,
+  dependencies : [dl_dep, nisaba_dep],
   link_with : atum_media_lib.get_static_lib()
 )
 

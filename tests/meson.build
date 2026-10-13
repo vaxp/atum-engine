@@ -33,6 +33,8 @@ test_cases = [
   'real_assets',
   'vulkan_interop',
   'vulkan_visual_verify',
+  'opengl_interop',
+  'opengl_visual_verify',
 ]
 
 foreach t : test_cases

@@ -19,6 +19,7 @@ enum class HwDeviceType : uint8_t {
     Nvdec,               ///< NVIDIA Hardware Decoder
     AndroidMediaCodec,   ///< Android NDK AHardwareBuffer & MediaCodec
     Vulkan,              ///< Vulkan Graphics Interop & Vulkan Video (Cross-Platform)
+    OpenGl,              ///< OpenGL / EGL Zero-Copy DMA-BUF Interop & Shader Presentation
 };
 
 constexpr std::string_view hw_device_type_to_string(HwDeviceType type) noexcept {
@@ -29,6 +30,7 @@ constexpr std::string_view hw_device_type_to_string(HwDeviceType type) noexcept 
         case HwDeviceType::Nvdec:             return "NVDEC";
         case HwDeviceType::AndroidMediaCodec: return "Android MediaCodec";
         case HwDeviceType::Vulkan:            return "Vulkan";
+        case HwDeviceType::OpenGl:            return "OpenGL / EGL";
         default:                              return "Software Fallback";
     }
 }

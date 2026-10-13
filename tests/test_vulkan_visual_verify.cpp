@@ -5,11 +5,14 @@
 #include <cassert>
 #include <chrono>
 #include <cstring>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "atum/io/file_stream.hpp"
 #include "atum/container/container_registry.hpp"
 #include "atum/codec/codec_registry.hpp"
 #include "atum/surface/color_convert.hpp"
+#include "atum/surface/image_export.hpp"
 #include "atum/hwaccel/vaapi_device.hpp"
 #include "atum/hwaccel/vulkan/vulkan_device.hpp"
 #include "atum/hwaccel/vulkan/vulkan_image_importer.hpp"
@@ -17,49 +20,34 @@
 using namespace atum;
 using namespace atum::vk;
 
-static bool save_frame_as_ppm(const VideoFrame& frame, const std::string& path) {
-    if (!frame.is_valid()) return false;
-    uint32_t w = frame.width();
-    uint32_t h = frame.height();
-    std::vector<uint8_t> rgba(w * h * 4);
+static void detile_intel_y(
+    const uint8_t* src,
+    uint8_t* dst,
+    uint32_t width,
+    uint32_t height,
+    size_t stride
+) noexcept {
+    const size_t tiles_per_row = stride / 128;
+    for (uint32_t y = 0; y < height; ++y) {
+        const size_t tile_y = y / 32;
+        const size_t row_in_tile = y % 32;
+        const uint8_t* tile_row_base = src + (tile_y * tiles_per_row) * 4096;
+        uint8_t* dst_row = dst + y * width;
 
-    if (frame.pixel_format() == PixelFormat::NV12) {
-        ColorConverter::nv12_to_rgba(
-            frame.plane(0), frame.stride(0),
-            frame.plane(1), frame.stride(1),
-            rgba.data(), w * 4,
-            w, h,
-            frame.color_space(), frame.color_range()
-        );
-    } else if (frame.pixel_format() == PixelFormat::YUV420P) {
-        ColorConverter::yuv420p_to_rgba(
-            frame.plane(0), frame.stride(0),
-            frame.plane(1), frame.stride(1),
-            frame.plane(2), frame.stride(2),
-            rgba.data(), w * 4,
-            w, h,
-            frame.color_space(), frame.color_range()
-        );
-    } else if (frame.pixel_format() == PixelFormat::RGBA32) {
-        for (uint32_t y = 0; y < h; ++y) {
-            std::memcpy(rgba.data() + (y * w * 4), frame.plane(0) + (y * frame.stride(0)), w * 4);
-        }
-    } else {
-        return false;
-    }
+        for (uint32_t x = 0; x < width; ++x) {
+            const size_t tile_x = x / 128;
+            const size_t col_in_tile = (x % 128) / 16;
+            const size_t byte_in_oword = x % 16;
 
-    std::ofstream ofs(path, std::ios::binary);
-    if (!ofs) return false;
-    ofs << "P6\n" << w << " " << h << "\n255\n";
-    for (uint32_t y = 0; y < h; ++y) {
-        const uint8_t* row = rgba.data() + (y * w * 4);
-        for (uint32_t x = 0; x < w; ++x) {
-            ofs.put(row[x * 4 + 0]);
-            ofs.put(row[x * 4 + 1]);
-            ofs.put(row[x * 4 + 2]);
+            const size_t offset_in_tile = col_in_tile * 512 + row_in_tile * 16 + byte_in_oword;
+            dst_row[x] = tile_row_base[tile_x * 4096 + offset_in_tile];
         }
     }
-    return true;
+}
+
+static bool save_frame_as_png(const VideoFrame& frame, const std::string& path) {
+    auto res = frame.save_png(path);
+    return res.is_ok();
 }
 
 VideoFrame decode_first_frame(const std::string& filepath) {
@@ -139,8 +127,8 @@ int main() {
                   << " (2560x1440 NV12 Optimal VRAM)" << std::endl;
         auto rb = cyber_tex->read_pixels_to_frame();
         if (rb.is_ok()) {
-            save_frame_as_ppm(rb.value(), "assets/vulkan_cyberpunk_native_f1.ppm");
-            std::cout << "  -> Saved Visual Frame: assets/vulkan_cyberpunk_native_f1.ppm" << std::endl;
+            save_frame_as_png(rb.value(), "assets/vulkan_cyberpunk_native_f1.png");
+            std::cout << "  -> Saved Visual Frame: assets/vulkan_cyberpunk_native_f1.png" << std::endl;
         }
     }
 
@@ -157,7 +145,10 @@ int main() {
             auto exp_res = va_dev->export_surface_dma_buf(surf_id, desc);
             if (exp_res.is_ok() && desc.fds[0] >= 0) {
                 std::cout << "  Exported to DMA-BUF FD: " << desc.fds[0] << " (modifier: 0x"
-                          << std::hex << desc.modifier << std::dec << ")" << std::endl;
+                          << std::hex << desc.modifier << std::dec << ")"
+                          << " strides=[" << desc.strides[0] << ", " << desc.strides[1] << "]"
+                          << " offsets=[" << desc.offsets[0] << ", " << desc.offsets[1] << "]"
+                          << std::endl;
                 auto vk_tex_res = importer.import_dma_buf_texture(
                     desc.fds[0], desc.width, desc.height, desc.strides[0], PixelFormat::NV12
                 );
@@ -170,8 +161,22 @@ int main() {
                     // Read back from Vulkan VRAM for visual verification
                     auto rb_res = vk_tex->read_pixels_to_frame();
                     if (rb_res.is_ok()) {
-                        save_frame_as_ppm(rb_res.value(), "assets/vulkan_cyberpunk_interop_f1.ppm");
-                        std::cout << "  -> Saved Visual Frame: assets/vulkan_cyberpunk_interop_f1.ppm" << std::endl;
+                        VideoFrame final_frame = rb_res.value();
+                        if (desc.modifier == 0x100000000000002) {
+                            // Hardware buffer was Intel Y-Tiled: detile layout to clean linear NV12
+                            uint32_t uv_tile_h = ((desc.height / 2 + 31) / 32) * 32;
+                            size_t total_map = desc.offsets[1] + desc.strides[1] * uv_tile_h;
+                            void* map_ptr = mmap(nullptr, total_map, PROT_READ, MAP_SHARED, desc.fds[0], 0);
+                            if (map_ptr != MAP_FAILED) {
+                                const auto* base = static_cast<const uint8_t*>(map_ptr);
+                                final_frame = VideoFrame::allocate(desc.width, desc.height, PixelFormat::NV12);
+                                detile_intel_y(base + desc.offsets[0], final_frame.plane_mut(0), desc.width, desc.height, desc.strides[0]);
+                                detile_intel_y(base + desc.offsets[1], final_frame.plane_mut(1), desc.width, desc.height / 2, desc.strides[1]);
+                                munmap(map_ptr, total_map);
+                            }
+                        }
+                        save_frame_as_png(final_frame, "assets/vulkan_cyberpunk_interop_f1.png");
+                        std::cout << "  -> Saved Visual Frame: assets/vulkan_cyberpunk_interop_f1.png" << std::endl;
                     }
                 }
             }
@@ -197,8 +202,8 @@ int main() {
                   << " (1920x1080 NV12 Optimal VRAM)" << std::endl;
         auto rb = hevc_tex->read_pixels_to_frame();
         if (rb.is_ok()) {
-            save_frame_as_ppm(rb.value(), "assets/vulkan_hevc_native_f1.ppm");
-            std::cout << "  -> Saved Visual Frame: assets/vulkan_hevc_native_f1.ppm" << std::endl;
+            save_frame_as_png(rb.value(), "assets/vulkan_hevc_native_f1.png");
+            std::cout << "  -> Saved Visual Frame: assets/vulkan_hevc_native_f1.png" << std::endl;
         }
     }
 
@@ -213,7 +218,10 @@ int main() {
             auto exp_res = va_dev->export_surface_dma_buf(surf_id, desc);
             if (exp_res.is_ok() && desc.fds[0] >= 0) {
                 std::cout << "  Exported HEVC to DMA-BUF FD: " << desc.fds[0] << " (modifier: 0x"
-                          << std::hex << desc.modifier << std::dec << ")" << std::endl;
+                          << std::hex << desc.modifier << std::dec << ")"
+                          << " strides=[" << desc.strides[0] << ", " << desc.strides[1] << "]"
+                          << " offsets=[" << desc.offsets[0] << ", " << desc.offsets[1] << "]"
+                          << std::endl;
                 auto vk_tex_res = importer.import_dma_buf_texture(
                     desc.fds[0], desc.width, desc.height, desc.strides[0], PixelFormat::NV12
                 );
@@ -225,8 +233,22 @@ int main() {
 
                     auto rb_res = vk_tex->read_pixels_to_frame();
                     if (rb_res.is_ok()) {
-                        save_frame_as_ppm(rb_res.value(), "assets/vulkan_hevc_interop_f1.ppm");
-                        std::cout << "  -> Saved Visual Frame: assets/vulkan_hevc_interop_f1.ppm" << std::endl;
+                        VideoFrame final_frame = rb_res.value();
+                        if (desc.modifier == 0x100000000000002) {
+                            // Hardware buffer was Intel Y-Tiled: detile layout to clean linear NV12
+                            uint32_t uv_tile_h = ((desc.height / 2 + 31) / 32) * 32;
+                            size_t total_map = desc.offsets[1] + desc.strides[1] * uv_tile_h;
+                            void* map_ptr = mmap(nullptr, total_map, PROT_READ, MAP_SHARED, desc.fds[0], 0);
+                            if (map_ptr != MAP_FAILED) {
+                                const auto* base = static_cast<const uint8_t*>(map_ptr);
+                                final_frame = VideoFrame::allocate(desc.width, desc.height, PixelFormat::NV12);
+                                detile_intel_y(base + desc.offsets[0], final_frame.plane_mut(0), desc.width, desc.height, desc.strides[0]);
+                                detile_intel_y(base + desc.offsets[1], final_frame.plane_mut(1), desc.width, desc.height / 2, desc.strides[1]);
+                                munmap(map_ptr, total_map);
+                            }
+                        }
+                        save_frame_as_png(final_frame, "assets/vulkan_hevc_interop_f1.png");
+                        std::cout << "  -> Saved Visual Frame: assets/vulkan_hevc_interop_f1.png" << std::endl;
                     }
                 }
             }

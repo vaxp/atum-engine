@@ -7,6 +7,7 @@
 #include <array>
 #include <memory>
 #include "atum/core/frame.hpp"
+#include "atum/core/media_types.hpp"
 #include "atum/surface/pixel_format.hpp"
 #include "atum/color/hdr_metadata.hpp"
 
@@ -98,6 +99,12 @@ public:
 
     void ensure_owned();
     [[nodiscard]] VideoFrame clone() const;
+
+    /// Saves frame directly to an image file (.png, .jpg, .webp, .qoi, .bmp) using sovereign Nisaba engine.
+    [[nodiscard]] MediaResult<void> save_image(const std::string& path, int quality_or_compression = 90) const;
+
+    /// Saves frame directly to a PNG file using sovereign Nisaba engine.
+    [[nodiscard]] MediaResult<void> save_png(const std::string& path, int compression_level = 6) const;
 
     // --- Hardware Acceleration & Zero-Copy Properties ---
     [[nodiscard]] bool is_hw_frame() const noexcept { return is_hw_frame_; }

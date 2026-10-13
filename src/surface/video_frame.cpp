@@ -1,4 +1,5 @@
 #include "atum/surface/video_frame.hpp"
+#include "atum/surface/image_export.hpp"
 #include <cstring>
 #include <algorithm>
 
@@ -402,6 +403,14 @@ VideoFrame VideoFrame::clone() const {
         }
     }
     return new_frame;
+}
+
+MediaResult<void> VideoFrame::save_image(const std::string& path, int quality_or_compression) const {
+    return ImageExporter::save_image(*this, path, quality_or_compression);
+}
+
+MediaResult<void> VideoFrame::save_png(const std::string& path, int compression_level) const {
+    return ImageExporter::save_png(*this, path, compression_level);
 }
 
 } // namespace atum
