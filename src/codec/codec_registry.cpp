@@ -12,6 +12,7 @@
 #include "atum/codec/audio/aac/aac_decoder.hpp"
 #include "atum/codec/audio/opus/opus_decoder.hpp"
 #include "atum/codec/audio/flac/flac_decoder.hpp"
+#include "atum/hwaccel/vaapi_encoder.hpp"
 
 namespace atum {
 
@@ -52,6 +53,9 @@ std::unique_ptr<AudioDecoder> CodecRegistry::create_audio_decoder(CodecId id) {
 
 std::unique_ptr<VideoEncoder> CodecRegistry::create_video_encoder(CodecId id) {
     switch (id) {
+        case CodecId::H264:
+        case CodecId::H265:
+            return std::make_unique<VaapiEncoder>();
         case CodecId::QOI_VIDEO:
             return std::make_unique<QoiVideoEncoder>();
         default:

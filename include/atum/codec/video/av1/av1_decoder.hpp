@@ -7,16 +7,15 @@
 #include "atum/decode/decoder.hpp"
 #include "atum/codec/video/av1/av1_parser.hpp"
 #include "atum/predict/dpb.hpp"
+#include "atum/hwaccel/hwaccel.hpp"
 
 namespace atum {
 
-/// Sovereign AV1 Video Decoder.
-/// Integrates multi-symbol CDF arithmetic symbol decoder,
-/// Constrained Directional Enhancement Filter (CDEF), and reference frame buffer.
+/// Sovereign Hardware-Accelerated AV1 Video Decoder.
 class Av1Decoder : public VideoDecoder {
 public:
     Av1Decoder();
-    ~Av1Decoder() override = default;
+    ~Av1Decoder() override;
 
     MediaResult<void> init(const CodecParameters& params) override;
     MediaResult<void> send_packet(const Packet& packet) override;
@@ -36,28 +35,36 @@ public:
         return dpb_;
     }
 
-    /// Configures the number of parallel worker threads (0 = default pool, 1 = single-threaded).
+    [[nodiscard]] HwDevice* hw_device() const noexcept {
+        return hw_device_.get();
+    }
+
+    [[nodiscard]] bool is_hw_supported() const noexcept {
+        return is_hw_supported_;
+    }
+
     void set_thread_count(size_t threads) noexcept { thread_count_ = threads; }
     [[nodiscard]] size_t thread_count() const noexcept { return thread_count_; }
-
-    /// Configures tile grid partitioning.
-    void set_tile_grid(uint32_t cols, uint32_t rows) noexcept {
-        tile_cols_ = cols;
-        tile_rows_ = rows;
-    }
 
 private:
     CodecParameters params_;
     Av1Parser parser_;
     std::queue<VideoFrame> ready_frames_;
     DecodedPictureBuffer dpb_{8};
+    std::unique_ptr<HwDevice> hw_device_;
+    bool is_hw_supported_{false};
     uint32_t frame_count_{0};
     size_t thread_count_{0};
-    uint32_t tile_cols_{2};
-    uint32_t tile_rows_{2};
 
-    void reconstruct_frame(VideoFrame& frame, const Av1FrameHeader* header, std::span<const uint8_t> payload);
+    // Hardware Acceleration Pipeline State
+    uint32_t hw_config_id_{0};
+    uint32_t hw_context_id_{0};
+    std::vector<uint32_t> hw_surfaces_;
+    uint32_t current_surface_idx_{0};
+    bool hw_pipeline_initialized_{false};
+
+    void init_hardware_pipeline(uint32_t width, uint32_t height);
+    void release_hardware_pipeline();
 };
 
 } // namespace atum
-

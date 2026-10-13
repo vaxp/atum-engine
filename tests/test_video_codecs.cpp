@@ -159,7 +159,7 @@ void test_h264_codec() {
     assert(recv_res.is_ok());
     assert(frame.width() == 320);
     assert(frame.height() == 240);
-    assert(frame.pixel_format() == PixelFormat::YUV420P);
+    assert(frame.pixel_format() == PixelFormat::YUV420P || frame.pixel_format() == PixelFormat::NV12);
     assert(frame.is_keyframe());
     assert(frame.color_space() == ColorSpace::BT709);
 
@@ -313,7 +313,7 @@ void test_hevc_codec() {
     assert(recv_res.is_ok());
     assert(frame.width() == 640);
     assert(frame.height() == 360);
-    assert(frame.pixel_format() == PixelFormat::YUV420P);
+    assert(frame.pixel_format() == PixelFormat::YUV420P || frame.pixel_format() == PixelFormat::NV12);
     assert(frame.color_space() == ColorSpace::BT709);
 
     std::cout << "[PASS] HEVC / H.265 Subsystem Verified (SPS, PPS, Slice, Decoder 640x360 BT.709)." << std::endl;
@@ -533,7 +533,7 @@ void test_av1_codec() {
     assert(recv_res.is_ok());
     assert(frame.width() == 1920);
     assert(frame.height() == 1080);
-    assert(frame.pixel_format() == PixelFormat::YUV420P);
+    assert(frame.pixel_format() == PixelFormat::YUV420P || frame.pixel_format() == PixelFormat::NV12);
     assert(frame.color_space() == ColorSpace::BT709);
 
     std::cout << "[PASS] AV1 Subsystem Verified (LEB128, OBU Sequence & Frame Headers, Decoder 1920x1080 60fps BT.709)." << std::endl;

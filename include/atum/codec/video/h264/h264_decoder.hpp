@@ -16,11 +16,11 @@ namespace atum {
 /// Sovereign H.264 / AVC Video Decoder.
 /// Integrates CABAC entropy engine, SIMD integer IDCT transforms,
 /// spatial/temporal prediction, DPB reference management, adaptive in-loop deblocking,
-/// and autonomous network resilience & error concealment.
+/// and autonomous resilience & error concealment.
 class H264Decoder : public VideoDecoder {
 public:
     H264Decoder();
-    ~H264Decoder() override = default;
+    ~H264Decoder() override;
 
     MediaResult<void> init(const CodecParameters& params) override;
     MediaResult<void> send_packet(const Packet& packet) override;
@@ -88,7 +88,15 @@ private:
     ResilientNalParser resilient_parser_{ResilientNalParser::CodecStandard::H264};
     ErrorConcealmentMask damage_mask_;
 
-    void reconstruct_frame(VideoFrame& frame, const H264SliceHeader* slice_hdr, std::span<const uint8_t> payload);
+    // Hardware Acceleration Pipeline State
+    uint32_t hw_config_id_{0};
+    uint32_t hw_context_id_{0};
+    std::vector<uint32_t> hw_surfaces_;
+    uint32_t current_surface_idx_{0};
+    bool hw_pipeline_initialized_{false};
+
+    void init_hardware_pipeline(uint32_t width, uint32_t height);
+    void release_hardware_pipeline();
 };
 
 } // namespace atum

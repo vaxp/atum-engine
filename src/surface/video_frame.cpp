@@ -25,6 +25,9 @@ VideoFrame::VideoFrame(const VideoFrame& other)
     duration_ = other.duration_;
     timebase_ = other.timebase_;
     is_keyframe_ = other.is_keyframe_;
+    is_hw_frame_ = other.is_hw_frame_;
+    hw_surface_id_ = other.hw_surface_id_;
+    dma_buf_fd_ = other.dma_buf_fd_;
 
     if (other.is_owned_) {
         owned_buffer_ = other.owned_buffer_;
@@ -61,6 +64,9 @@ VideoFrame& VideoFrame::operator=(const VideoFrame& other) {
     duration_ = other.duration_;
     timebase_ = other.timebase_;
     is_keyframe_ = other.is_keyframe_;
+    is_hw_frame_ = other.is_hw_frame_;
+    hw_surface_id_ = other.hw_surface_id_;
+    dma_buf_fd_ = other.dma_buf_fd_;
 
     if (other.is_owned_) {
         owned_buffer_ = other.owned_buffer_;
@@ -371,6 +377,9 @@ VideoFrame VideoFrame::clone() const {
     new_frame.set_duration(duration_);
     new_frame.set_timebase(timebase_);
     new_frame.set_keyframe(is_keyframe_);
+    new_frame.set_hw_frame(is_hw_frame_);
+    new_frame.set_hw_surface_id(hw_surface_id_);
+    new_frame.set_dma_buf_fd(dma_buf_fd_);
 
     size_t num_planes = plane_count();
     size_t bps = bytes_per_sample();

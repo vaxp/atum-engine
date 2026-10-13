@@ -17,7 +17,7 @@ namespace atum {
 class HevcDecoder : public VideoDecoder {
 public:
     HevcDecoder();
-    ~HevcDecoder() override = default;
+    ~HevcDecoder() override;
 
     MediaResult<void> init(const CodecParameters& params) override;
     MediaResult<void> send_packet(const Packet& packet) override;
@@ -61,7 +61,15 @@ private:
     uint32_t frame_count_{0};
     size_t thread_count_{0};
 
-    void reconstruct_frame(VideoFrame& frame, const HevcSliceHeader* slice_hdr, std::span<const uint8_t> payload);
+    // Hardware Acceleration Pipeline State
+    uint32_t hw_config_id_{0};
+    uint32_t hw_context_id_{0};
+    std::vector<uint32_t> hw_surfaces_;
+    uint32_t current_surface_idx_{0};
+    bool hw_pipeline_initialized_{false};
+
+    void init_hardware_pipeline(uint32_t width, uint32_t height);
+    void release_hardware_pipeline();
 };
 
 } // namespace atum

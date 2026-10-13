@@ -4,7 +4,6 @@
 #include <vector>
 #include "atum/surface/video_frame.hpp"
 #include "atum/surface/color_convert.hpp"
-#include "atum/predict/chroma_pred.hpp"
 
 using namespace atum;
 
@@ -148,66 +147,10 @@ static void test_high_bit_depth_color_conversion() {
     std::cout << "  High Bit-Depth Color Conversion OK!" << std::endl;
 }
 
-static void test_chroma_prediction() {
-    std::cout << "Testing Cross-Component Prediction (CfL) & 4:2:2 Chroma..." << std::endl;
-
-    // 1. Downsample luma 4:2:0
-    std::vector<int16_t> luma(16 * 16, 100);
-    luma[0] = 120; luma[1] = 140; luma[16] = 160; luma[17] = 180; // Top-left 2x2 mean = 150
-
-    std::vector<int16_t> luma_down(8 * 8, 0);
-    ChromaPredictor::downsample_luma(luma.data(), 16, luma_down.data(), 8, 8, ChromaSubsampling::CS_420);
-    assert(luma_down[0] == 150);
-
-    // 2. AC luma
-    std::vector<int16_t> ac_luma(8 * 8, 0);
-    ChromaPredictor::compute_ac_luma(luma_down.data(), ac_luma.data(), 8, 8);
-    // Mean of ac_luma should sum to approximately 0 (within integer rounding bounds <= total_samples / 2)
-    int32_t ac_sum = 0;
-    for (auto v : ac_luma) ac_sum += v;
-    assert(std::abs(ac_sum) <= 32);
-
-    // 3. CfL prediction
-    std::vector<int16_t> base_pred(8 * 8, 512);
-    std::vector<int16_t> pred_dst(8 * 8, 0);
-    const int16_t alpha_q4 = 16; // alpha = 1.0
-    ChromaPredictor::predict_cfl(base_pred.data(), ac_luma.data(), pred_dst.data(), 8, 8, alpha_q4, 10);
-    assert(pred_dst[0] == 512 + ac_luma[0]);
-
-    // 4. Rectangular 4:2:2 intra prediction (4x8 block)
-    std::vector<int16_t> top(4, 200);
-    std::vector<int16_t> left(8, 400);
-    std::vector<int16_t> rect_dst(4 * 8, 0);
-
-    // DC: (4 * 200 + 8 * 400 + 6) / 12 = (800 + 3200 + 6) / 12 = 4006 / 12 = 333
-    ChromaPredictor::pred_422_dc(top.data(), left.data(), rect_dst.data(), 4, 4, 8);
-    assert(rect_dst[0] == 333);
-    assert(rect_dst[4 * 8 - 1] == 333);
-
-    // Vertical
-    ChromaPredictor::pred_422_vertical(top.data(), rect_dst.data(), 4, 4, 8);
-    for (uint32_t y = 0; y < 8; ++y) {
-        for (uint32_t x = 0; x < 4; ++x) {
-            assert(rect_dst[y * 4 + x] == top[x]);
-        }
-    }
-
-    // Horizontal
-    ChromaPredictor::pred_422_horizontal(left.data(), rect_dst.data(), 4, 4, 8);
-    for (uint32_t y = 0; y < 8; ++y) {
-        for (uint32_t x = 0; x < 4; ++x) {
-            assert(rect_dst[y * 4 + x] == left[y]);
-        }
-    }
-
-    std::cout << "  Chroma Prediction OK!" << std::endl;
-}
-
 int main() {
     std::cout << "=== Running test_high_bit_depth_surface ===" << std::endl;
     test_surface_allocation_and_alignment();
     test_high_bit_depth_color_conversion();
-    test_chroma_prediction();
     std::cout << "=== ALL test_high_bit_depth_surface PASSED ===" << std::endl;
     return 0;
 }

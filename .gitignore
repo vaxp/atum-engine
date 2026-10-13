@@ -1,0 +1,20 @@
+# .gitignore for Asgard
+
+# Build directories
+build/
+build-*/
+bin/
+lib/
+out/
+.cache/
+
+# IDE & Tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+compile_commands.json
+.clangd/
+
+
+VAXPLABS/

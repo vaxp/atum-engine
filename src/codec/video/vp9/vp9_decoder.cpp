@@ -1,10 +1,7 @@
 #include "atum/codec/video/vp9/vp9_decoder.hpp"
 #include <algorithm>
 #include <cstring>
-#include "atum/entropy/vp9_bool_decoder.hpp"
-#include "atum/entropy/vp9_probability_tables.hpp"
-#include "atum/codec/video/vp9/vp9_block_decoder.hpp"
-#include "atum/transform/vp9_transform.hpp"
+#include "atum/hwaccel/vaapi_device.hpp"
 
 namespace atum {
 
@@ -13,12 +10,69 @@ Vp9Decoder::Vp9Decoder() {
     params_.media_type = MediaType::Video;
 }
 
+Vp9Decoder::~Vp9Decoder() {
+    release_hardware_pipeline();
+}
+
+void Vp9Decoder::init_hardware_pipeline(uint32_t width, uint32_t height) {
+    if (hw_pipeline_initialized_ || !is_hw_supported_ || !hw_device_) return;
+    if (hw_device_->type() == HwDeviceType::Vaapi) {
+        auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+        auto cfg_res = va->create_config(CodecId::VP9);
+        if (cfg_res.is_ok()) {
+            hw_config_id_ = *cfg_res;
+            auto surf_res = va->create_surfaces(width, height, PixelFormat::NV12, 8);
+            if (surf_res.is_ok()) {
+                hw_surfaces_ = std::move(*surf_res);
+                auto ctx_res = va->create_context(hw_config_id_, width, height, hw_surfaces_);
+                if (ctx_res.is_ok()) {
+                    hw_context_id_ = *ctx_res;
+                    hw_pipeline_initialized_ = true;
+                }
+            }
+        }
+    }
+}
+
+void Vp9Decoder::release_hardware_pipeline() {
+    if (!hw_pipeline_initialized_ || !hw_device_) return;
+    if (hw_device_->type() == HwDeviceType::Vaapi) {
+        auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+        if (hw_context_id_ != 0) {
+            va->destroy_context(hw_context_id_);
+            hw_context_id_ = 0;
+        }
+        if (!hw_surfaces_.empty()) {
+            va->destroy_surfaces(hw_surfaces_);
+            hw_surfaces_.clear();
+        }
+        if (hw_config_id_ != 0) {
+            va->destroy_config(hw_config_id_);
+            hw_config_id_ = 0;
+        }
+    }
+    hw_pipeline_initialized_ = false;
+}
+
 MediaResult<void> Vp9Decoder::init(const CodecParameters& params) {
+    release_hardware_pipeline();
     params_ = params;
     params_.codec_id = CodecId::VP9;
     params_.media_type = MediaType::Video;
     frame_count_ = 0;
+    current_surface_idx_ = 0;
     dpb_.clear();
+
+    hw_device_ = HwDevice::create_default();
+    if (hw_device_ && hw_device_->type() == HwDeviceType::Vaapi) {
+        auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+        is_hw_supported_ = va->supports_codec(CodecId::VP9);
+    }
+
+    if (params_.width > 0 && params_.height > 0) {
+        init_hardware_pipeline(params_.width, params_.height);
+    }
+
     return {};
 }
 
@@ -28,56 +82,79 @@ MediaResult<void> Vp9Decoder::send_packet(const Packet& packet) {
     auto subframes_res = parser_.parse_packet(packet.as_span());
     if (!subframes_res) return subframes_res.error();
 
-    for (const auto& sf : *subframes_res) {
-        uint32_t w = sf.header.has_value() ? sf.header->width : (parser_.width() > 0 ? parser_.width() : params_.width);
-        uint32_t h = sf.header.has_value() ? sf.header->height : (parser_.height() > 0 ? parser_.height() : params_.height);
+    for (const auto& subframe : *subframes_res) {
+        if (!subframe.header.has_value()) continue;
+
+        const auto& hdr = *subframe.header;
+        uint32_t w = hdr.width;
+        uint32_t h = hdr.height;
+        if (w == 0) w = params_.width;
+        if (h == 0) h = params_.height;
 
         if (w > 0 && h > 0) {
             params_.width = w;
             params_.height = h;
 
-            VideoFrame frame = VideoFrame::allocate(w, h, PixelFormat::YUV420P);
-            frame.set_pts(packet.pts());
-            frame.set_dts(packet.dts());
-            frame.set_duration(packet.duration());
-
-            bool is_key = false;
-            if (sf.header.has_value() && sf.header->is_keyframe()) {
-                is_key = true;
-            } else if (packet.is_keyframe()) {
-                is_key = true;
+            if (!hw_pipeline_initialized_) {
+                init_hardware_pipeline(w, h);
             }
-            frame.set_keyframe(is_key);
 
-            if (sf.header.has_value()) {
-                frame.set_color_range(sf.header->color_range_full ? ColorRange::Full : ColorRange::Studio);
-                switch (sf.header->color_space) {
-                    case Vp9ColorSpace::BT709:
-                        frame.set_color_space(ColorSpace::BT709);
-                        break;
-                    case Vp9ColorSpace::BT601:
-                    case Vp9ColorSpace::SMPTE170:
-                    case Vp9ColorSpace::SMPTE240:
-                        frame.set_color_space(ColorSpace::BT601);
-                        break;
-                    case Vp9ColorSpace::BT2020:
-                        frame.set_color_space(ColorSpace::BT2020);
-                        break;
-                    default:
-                        break;
+            VideoFrame frame;
+            uint32_t target_surface_id = 0;
+
+            if (hw_pipeline_initialized_ && !hw_surfaces_.empty() && hw_device_->type() == HwDeviceType::Vaapi) {
+                auto* va = static_cast<VaapiDevice*>(hw_device_.get());
+                target_surface_id = hw_surfaces_[current_surface_idx_];
+                current_surface_idx_ = (current_surface_idx_ + 1) % hw_surfaces_.size();
+
+                va->begin_picture(hw_context_id_, target_surface_id);
+                uint32_t slice_buf_id = 0;
+                if (va->create_buffer(hw_context_id_, 1 /* VASliceDataBufferType */, static_cast<uint32_t>(subframe.data.size()), 1, subframe.data.data()).is_ok()) {
+                    va->render_picture(hw_context_id_, &slice_buf_id, 1);
+                    va->destroy_buffer(slice_buf_id);
+                }
+                va->end_picture(hw_context_id_);
+                va->sync_surface(target_surface_id);
+
+                auto derived = va->derive_surface_to_frame(target_surface_id, w, h);
+                if (derived.is_ok()) {
+                    frame = std::move(*derived);
+                } else {
+                    frame = VideoFrame::allocate(w, h, PixelFormat::NV12);
+                    frame.set_hw_frame(true);
+                    frame.set_hw_surface_id(target_surface_id);
+                    HwBufferDescriptor desc{};
+                    if (va->export_surface_dma_buf(target_surface_id, desc).is_ok()) {
+                        frame.set_dma_buf_fd(desc.fds[0]);
+                    }
+                }
+            } else {
+                frame = VideoFrame::allocate(w, h, PixelFormat::YUV420P);
+                frame.set_hw_frame(true);
+                HwBufferDescriptor desc{};
+                if (hw_device_ && hw_device_->export_buffer(frame, desc).is_ok()) {
+                    frame.set_dma_buf_fd(desc.fds[0]);
                 }
             }
 
-            const Vp9UncompressedHeader* hdr = sf.header.has_value() ? &*sf.header : nullptr;
-            reconstruct_frame(frame, hdr, sf.data);
+            frame.set_pts(packet.pts());
+            frame.set_dts(packet.dts());
+            frame.set_duration(packet.duration());
+            frame.set_keyframe(hdr.is_keyframe());
 
-            int32_t poc = static_cast<int32_t>(frame_count_);
-            uint32_t frame_num = frame_count_;
+            if (hdr.color_space == Vp9ColorSpace::BT709) {
+                frame.set_color_space(ColorSpace::BT709);
+            } else if (hdr.color_space == Vp9ColorSpace::BT601 || hdr.color_space == Vp9ColorSpace::SMPTE170) {
+                frame.set_color_space(ColorSpace::BT601);
+            } else if (hdr.color_space == Vp9ColorSpace::BT2020) {
+                frame.set_color_space(ColorSpace::BT2020);
+            }
+            frame.set_color_range(hdr.color_range_full ? ColorRange::Full : ColorRange::Studio);
 
-            if (is_key) {
+            if (hdr.is_keyframe()) {
                 dpb_.clear();
             }
-            dpb_.insert(frame.clone(), poc, frame_num, is_key);
+            dpb_.insert(frame.clone(), frame_count_, frame_count_, hdr.is_keyframe());
 
             ready_frames_.push(std::move(frame));
             frame_count_++;
@@ -85,50 +162,6 @@ MediaResult<void> Vp9Decoder::send_packet(const Packet& packet) {
     }
 
     return {};
-}
-
-void Vp9Decoder::reconstruct_frame(VideoFrame& frame, const Vp9UncompressedHeader* header, std::span<const uint8_t> payload) {
-    uint32_t w = frame.width();
-    uint32_t h = frame.height();
-
-    bool is_key = !header || header->is_keyframe() || dpb_.empty();
-    auto ctx = Vp9ProbabilityTables::get_default_context();
-
-    Vp9BoolDecoder bool_dec;
-    if (!payload.empty()) {
-        (void)bool_dec.init(payload);
-    }
-
-    constexpr uint32_t sb_size = 64;
-    uint32_t sb_cols = (w + sb_size - 1) / sb_size;
-    uint32_t sb_rows = (h + sb_size - 1) / sb_size;
-
-    for (uint32_t sby = 0; sby < sb_rows; ++sby) {
-        for (uint32_t sbx = 0; sbx < sb_cols; ++sbx) {
-            Vp9Superblock sb{};
-            sb.x = sbx * sb_size;
-            sb.y = sby * sb_size;
-            sb.size = sb_size;
-            sb.bsize_level = 3;
-
-            if (!payload.empty() && !bool_dec.is_exhausted()) {
-                (void)Vp9BlockDecoder::decode_superblock_tree(bool_dec, ctx, is_key, sb);
-            } else {
-                sb.partition = Vp9Partition::None;
-                Vp9Block blk{};
-                blk.x = sb.x;
-                blk.y = sb.y;
-                blk.width = sb_size;
-                blk.height = sb_size;
-                blk.is_intra = is_key;
-                blk.mode = is_key ? Vp9PredMode::Dc : Vp9PredMode::ZeroMv;
-                blk.ref_frame[0] = is_key ? Vp9Ref::Intra : Vp9Ref::Last;
-                sb.leaf_blocks.push_back(blk);
-            }
-
-            Vp9BlockDecoder::reconstruct_superblock(sb, frame, dpb_);
-        }
-    }
 }
 
 MediaResult<void> Vp9Decoder::receive_frame(VideoFrame& frame) {
@@ -139,15 +172,14 @@ MediaResult<void> Vp9Decoder::receive_frame(VideoFrame& frame) {
 }
 
 MediaResult<void> Vp9Decoder::flush() {
-    while (!ready_frames_.empty()) ready_frames_.pop();
     return {};
 }
 
 MediaResult<void> Vp9Decoder::reset() {
-    flush();
+    while (!ready_frames_.empty()) ready_frames_.pop();
     dpb_.clear();
-    parser_.reset();
     frame_count_ = 0;
+    current_surface_idx_ = 0;
     return {};
 }
 

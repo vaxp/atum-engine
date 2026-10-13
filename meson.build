@@ -65,57 +65,21 @@ atum_media_sources = files(
   'src/container/ts/ts_muxer.cpp',
   'src/container/isobmff_muxer.cpp',
   'src/container/container_registry.cpp',
-    'src/color/transfer_function.cpp',
-    'src/color/color_gamut.cpp',
-    'src/color/tone_mapper.cpp',
-    'src/codec/sei_parser.cpp',
-    'src/predict/chroma_pred.cpp',
-    'src/network/rtp/rtp_depacketizer.cpp',
-    'src/codec/video/h264/h264_forward_transform.cpp',
-    'src/codec/video/motion_estimate.cpp',
-    'src/codec/video/h264/h264_rate_control.cpp',
-    'src/codec/video/h264/h264_rdo.cpp',
-    'src/codec/video/h264/h264_entropy_encoder.cpp',
-    'src/codec/video/h264/h264_encoder.cpp',
-    'src/codec/screen/screen_content.cpp',
-    'src/recorder/canvas_recorder.cpp',
-    'src/parallel/thread_pool.cpp',
-    'src/parallel/hevc_wpp.cpp',
-    'src/parallel/av1_tile_grid.cpp',
-    'src/parallel/frame_graph.cpp',
-    'src/resilience/error_mask.cpp',
-    'src/resilience/spatial_concealment.cpp',
-    'src/resilience/temporal_concealment.cpp',
-    'src/resilience/resilient_nal_parser.cpp',
-    'src/resilience/error_concealer.cpp',
-    'src/codec/video/av1/av1_partition.cpp',
-    'src/codec/video/h264/h264_macroblock_syntax.cpp',
-    'src/codec/video/h264/h264_residual_cabac.cpp',
-    'src/codec/video/hevc/hevc_ctu_decoder.cpp',
-    'src/codec/video/vp9/vp9_block_decoder.cpp',
-    'src/entropy/av1_cdf_tables.cpp',
-    'src/entropy/av1_symbol_decoder.cpp',
-    'src/entropy/cabac.cpp',
-    'src/entropy/h264_cabac_contexts.cpp',
-    'src/entropy/h264_cavlc.cpp',
-    'src/entropy/hevc_cabac_contexts.cpp',
-    'src/entropy/vp9_bool_decoder.cpp',
-    'src/entropy/vp9_probability_tables.cpp',
-    'src/hwaccel/vaapi_device.cpp',
-    'src/inloop/av1_film_grain.cpp',
-    'src/inloop/av1_restoration.cpp',
-    'src/inloop/cdef_av1.cpp',
-    'src/inloop/deblock_h264.cpp',
-    'src/inloop/sao_hevc.cpp',
-    'src/predict/dpb.cpp',
-    'src/predict/h264_inter_pred.cpp',
-    'src/predict/inter_filter.cpp',
-    'src/predict/intra_h264.cpp',
-    'src/predict/intra_hevc.cpp',
-    'src/transform/h264_transform.cpp',
-    'src/transform/hevc_transform.cpp',
-    'src/transform/simd_transform.cpp',
-    'src/transform/vp9_transform.cpp',
+  'src/color/transfer_function.cpp',
+  'src/color/color_gamut.cpp',
+  'src/color/tone_mapper.cpp',
+  'src/codec/sei_parser.cpp',
+  'src/hwaccel/vaapi_device.cpp',
+  'src/hwaccel/vaapi_param_builder.cpp',
+  'src/hwaccel/vaapi_encoder.cpp',
+  'src/predict/dpb.cpp',
+  'src/parallel/thread_pool.cpp',
+  'src/parallel/frame_graph.cpp',
+  'src/resilience/error_mask.cpp',
+  'src/resilience/spatial_concealment.cpp',
+  'src/resilience/temporal_concealment.cpp',
+  'src/resilience/resilient_nal_parser.cpp',
+  'src/resilience/error_concealer.cpp',
 )
 
 atum_media_lib = both_libraries('atum_media',
@@ -215,12 +179,6 @@ test_isobmff_advanced_exe = executable('test_isobmff_advanced',
 )
 test('isobmff_advanced_test', test_isobmff_advanced_exe)
 
-test_rtp_streaming_exe = executable('test_rtp_streaming',
-  'tests/test_rtp_streaming.cpp',
-  dependencies : atum_media_dep
-)
-test('rtp_streaming_test', test_rtp_streaming_exe)
-
 test_container_registry_exe = executable('test_container_registry',
   'tests/test_container_registry.cpp',
   dependencies : atum_media_dep
@@ -257,65 +215,17 @@ test_sei_metadata_exe = executable('test_sei_metadata',
 )
 test('sei_metadata_test', test_sei_metadata_exe)
 
-test_h264_forward_transform_exe = executable('test_h264_forward_transform',
-  'tests/test_h264_forward_transform.cpp',
-  dependencies : atum_media_dep
-)
-test('h264_forward_transform_test', test_h264_forward_transform_exe)
-
-test_motion_estimation_exe = executable('test_motion_estimation',
-  'tests/test_motion_estimation.cpp',
-  dependencies : atum_media_dep
-)
-test('motion_estimation_test', test_motion_estimation_exe)
-
-test_h264_rate_control_exe = executable('test_h264_rate_control',
-  'tests/test_h264_rate_control.cpp',
-  dependencies : atum_media_dep
-)
-test('h264_rate_control_test', test_h264_rate_control_exe)
-
-test_h264_entropy_encoder_exe = executable('test_h264_entropy_encoder',
-  'tests/test_h264_entropy_encoder.cpp',
-  dependencies : atum_media_dep
-)
-test('h264_entropy_encoder_test', test_h264_entropy_encoder_exe)
-
-test_h264_encoder_pipeline_exe = executable('test_h264_encoder_pipeline',
-  'tests/test_h264_encoder_pipeline.cpp',
-  dependencies : atum_media_dep
-)
-test('h264_encoder_pipeline_test', test_h264_encoder_pipeline_exe)
-
 test_thread_pool_exe = executable('test_thread_pool',
   'tests/test_thread_pool.cpp',
   dependencies : atum_media_dep
 )
 test('thread_pool_test', test_thread_pool_exe)
 
-test_hevc_wpp_exe = executable('test_hevc_wpp',
-  'tests/test_hevc_wpp.cpp',
-  dependencies : atum_media_dep
-)
-test('hevc_wpp_test', test_hevc_wpp_exe)
-
-test_av1_tile_grid_exe = executable('test_av1_tile_grid',
-  'tests/test_av1_tile_grid.cpp',
-  dependencies : atum_media_dep
-)
-test('av1_tile_grid_test', test_av1_tile_grid_exe)
-
 test_frame_dependency_graph_exe = executable('test_frame_dependency_graph',
   'tests/test_frame_dependency_graph.cpp',
   dependencies : atum_media_dep
 )
 test('frame_dependency_graph_test', test_frame_dependency_graph_exe)
-
-test_multicore_pipeline_benchmark_exe = executable('test_multicore_pipeline_benchmark',
-  'tests/test_multicore_pipeline_benchmark.cpp',
-  dependencies : atum_media_dep
-)
-test('multicore_pipeline_benchmark_test', test_multicore_pipeline_benchmark_exe)
 
 test_error_mask_exe = executable('test_error_mask',
   'tests/test_error_mask.cpp',
@@ -347,63 +257,21 @@ test_integrated_error_concealment_exe = executable('test_integrated_error_concea
 )
 test('integrated_error_concealment_test', test_integrated_error_concealment_exe)
 
-test_av1_advanced_exe = executable('test_av1_advanced',
-  'tests/test_av1_advanced.cpp',
-  dependencies : atum_media_dep
-)
-test('av1_advanced_test', test_av1_advanced_exe)
-
-test_entropy_exe = executable('test_entropy',
-  'tests/test_entropy.cpp',
-  dependencies : atum_media_dep
-)
-test('entropy_test', test_entropy_exe)
-
-test_h264_cabac_syntax_exe = executable('test_h264_cabac_syntax',
-  'tests/test_h264_cabac_syntax.cpp',
-  dependencies : atum_media_dep
-)
-test('h264_cabac_syntax_test', test_h264_cabac_syntax_exe)
-
-test_h264_cavlc_inter_exe = executable('test_h264_cavlc_inter',
-  'tests/test_h264_cavlc_inter.cpp',
-  dependencies : atum_media_dep
-)
-test('h264_cavlc_inter_test', test_h264_cavlc_inter_exe)
-
-test_hevc_ctu_exe = executable('test_hevc_ctu',
-  'tests/test_hevc_ctu.cpp',
-  dependencies : atum_media_dep
-)
-test('hevc_ctu_test', test_hevc_ctu_exe)
-
 test_hwaccel_exe = executable('test_hwaccel',
   'tests/test_hwaccel.cpp',
   dependencies : atum_media_dep
 )
 test('hwaccel_test', test_hwaccel_exe)
 
-test_inloop_filter_exe = executable('test_inloop_filter',
-  'tests/test_inloop_filter.cpp',
+test_hw_param_builder_exe = executable('test_hw_param_builder',
+  'tests/test_hw_param_builder.cpp',
   dependencies : atum_media_dep
 )
-test('inloop_filter_test', test_inloop_filter_exe)
+test('hw_param_builder_test', test_hw_param_builder_exe)
 
-test_prediction_exe = executable('test_prediction',
-  'tests/test_prediction.cpp',
+test_vaapi_encoder_exe = executable('test_vaapi_encoder',
+  'tests/test_vaapi_encoder.cpp',
   dependencies : atum_media_dep
 )
-test('prediction_test', test_prediction_exe)
-
-test_transform_simd_exe = executable('test_transform_simd',
-  'tests/test_transform_simd.cpp',
-  dependencies : atum_media_dep
-)
-test('transform_simd_test', test_transform_simd_exe)
-
-test_vp9_block_exe = executable('test_vp9_block',
-  'tests/test_vp9_block.cpp',
-  dependencies : atum_media_dep
-)
-test('vp9_block_test', test_vp9_block_exe)
+test('vaapi_encoder_test', test_vaapi_encoder_exe)
 
