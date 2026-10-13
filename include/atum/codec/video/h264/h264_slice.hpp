@@ -35,6 +35,26 @@ struct H264SliceHeader {
 
     uint32_t cabac_init_idc{0};
     int32_t slice_qp_delta{0};
+    uint32_t header_bit_size{0};
+
+    uint8_t disable_deblocking_filter_idc{0};
+    int8_t slice_alpha_c0_offset_div2{0};
+    int8_t slice_beta_offset_div2{0};
+
+    uint8_t luma_log2_weight_denom{0};
+    uint8_t chroma_log2_weight_denom{0};
+    uint8_t luma_weight_l0_flag{0};
+    int16_t luma_weight_l0[32]{0};
+    int16_t luma_offset_l0[32]{0};
+    uint8_t chroma_weight_l0_flag{0};
+    int16_t chroma_weight_l0[32][2]{{0}};
+    int16_t chroma_offset_l0[32][2]{{0}};
+    uint8_t luma_weight_l1_flag{0};
+    int16_t luma_weight_l1[32]{0};
+    int16_t luma_offset_l1[32]{0};
+    uint8_t chroma_weight_l1_flag{0};
+    int16_t chroma_weight_l1[32][2]{{0}};
+    int16_t chroma_offset_l1[32][2]{{0}};
 
     [[nodiscard]] bool is_keyframe() const noexcept {
         return slice_type == H264SliceType::I || slice_type == H264SliceType::SI;
@@ -45,7 +65,8 @@ struct H264SliceHeader {
         BitReader& reader,
         H264NalType nal_type,
         const H264Sps& sps,
-        const H264Pps& pps) noexcept;
+        const H264Pps& pps,
+        uint8_t nal_ref_idc = 1) noexcept;
 };
 
 } // namespace atum

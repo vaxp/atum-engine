@@ -51,6 +51,22 @@ public:
         return bits_left() >= count;
     }
 
+    /// Checks whether there is more data in the RBSP before the rbsp_stop_one_bit (H.264 / H.265 Section 7.2).
+    [[nodiscard]] bool more_rbsp_data() const noexcept {
+        if (byte_offset_ >= size_bytes_) return false;
+        size_t last_byte = size_bytes_;
+        while (last_byte > byte_offset_ && data_[last_byte - 1] == 0) {
+            last_byte--;
+        }
+        if (last_byte == 0 || last_byte < byte_offset_ + 1) {
+            return false;
+        }
+        uint8_t b = data_[last_byte - 1];
+        size_t last_bit_pos = (last_byte - 1) * 8 + (7 - __builtin_ctz(b));
+        size_t current_pos = byte_offset_ * 8 + bit_offset_;
+        return current_pos < last_bit_pos;
+    }
+
     /// Total bits remaining in the bitstream.
     [[nodiscard]] size_t bits_left() const noexcept {
         if (byte_offset_ >= size_bytes_) return 0;
@@ -62,6 +78,11 @@ public:
     /// Total bytes remaining in the stream (rounded down).
     [[nodiscard]] size_t bytes_left() const noexcept {
         return bits_left() / 8;
+    }
+
+    /// Total bits read so far.
+    [[nodiscard]] size_t bits_read() const noexcept {
+        return byte_offset_ * 8 + bit_offset_;
     }
 
     /// Current byte offset.

@@ -14,49 +14,52 @@ VaapiH264DecodeParams VaapiH264DecodeParams::build(
     uint32_t frame_num,
     int32_t poc,
     const DecodedPictureBuffer& dpb,
-    size_t slice_data_size
+    size_t slice_data_size,
+    bool is_reference_pic
 ) {
     VaapiH264DecodeParams params{};
 
-    // Picture width and height in macroblocks
-    uint32_t mb_w = (sps.width() + 15) / 16;
-    uint32_t mb_h = (sps.height() + 15) / 16;
-    params.pic_param.picture_width_in_mbs_minus1 = mb_w > 0 ? (mb_w - 1) : 0;
-    params.pic_param.picture_height_in_mbs_minus1 = mb_h > 0 ? (mb_h - 1) : 0;
+    // Picture width and height in macroblocks directly from SPS
+    params.pic_param.picture_width_in_mbs_minus1 = static_cast<uint16_t>(sps.pic_width_in_mbs_minus1);
+    params.pic_param.picture_height_in_mbs_minus1 = static_cast<uint16_t>(
+        sps.frame_mbs_only_flag ? sps.pic_height_in_map_units_minus1 : (2 * sps.pic_height_in_map_units_minus1 + 1)
+    );
     params.pic_param.bit_depth_luma_minus8 = static_cast<uint8_t>(sps.bit_depth_luma_minus8);
     params.pic_param.bit_depth_chroma_minus8 = static_cast<uint8_t>(sps.bit_depth_chroma_minus8);
     params.pic_param.num_ref_frames = static_cast<uint8_t>(sps.max_num_ref_frames);
 
     params.pic_param.seq_fields.bits.chroma_format_idc = sps.chroma_format_idc;
     params.pic_param.seq_fields.bits.residual_colour_transform_flag = sps.separate_colour_plane_flag;
-    params.pic_param.seq_fields.bits.frame_mbs_only_flag = sps.frame_mbs_only_flag;
-    params.pic_param.seq_fields.bits.direct_8x8_inference_flag = sps.direct_8x8_inference_flag;
+    params.pic_param.seq_fields.bits.gaps_in_frame_num_value_allowed_flag = sps.gaps_in_frame_num_value_allowed_flag ? 1 : 0;
+    params.pic_param.seq_fields.bits.frame_mbs_only_flag = sps.frame_mbs_only_flag ? 1 : 0;
+    params.pic_param.seq_fields.bits.mb_adaptive_frame_field_flag = sps.mb_adaptive_frame_field_flag ? 1 : 0;
+    params.pic_param.seq_fields.bits.direct_8x8_inference_flag = sps.direct_8x8_inference_flag ? 1 : 0;
     params.pic_param.seq_fields.bits.MinLumaBiPredSize8x8 = (sps.level_idc >= 31) ? 1 : 0;
     params.pic_param.seq_fields.bits.log2_max_frame_num_minus4 = sps.log2_max_frame_num_minus4;
     params.pic_param.seq_fields.bits.pic_order_cnt_type = sps.pic_order_cnt_type;
     params.pic_param.seq_fields.bits.log2_max_pic_order_cnt_lsb_minus4 = sps.log2_max_pic_order_cnt_lsb_minus4;
-    params.pic_param.seq_fields.bits.delta_pic_order_always_zero_flag = sps.delta_pic_order_always_zero_flag;
+    params.pic_param.seq_fields.bits.delta_pic_order_always_zero_flag = sps.delta_pic_order_always_zero_flag ? 1 : 0;
 
     params.pic_param.pic_init_qp_minus26 = static_cast<int8_t>(pps.pic_init_qp_minus26);
     params.pic_param.pic_init_qs_minus26 = static_cast<int8_t>(pps.pic_init_qs_minus26);
     params.pic_param.chroma_qp_index_offset = static_cast<int8_t>(pps.chroma_qp_index_offset);
     params.pic_param.second_chroma_qp_index_offset = static_cast<int8_t>(pps.second_chroma_qp_index_offset);
 
-    params.pic_param.pic_fields.bits.entropy_coding_mode_flag = pps.entropy_coding_mode_flag;
-    params.pic_param.pic_fields.bits.weighted_pred_flag = pps.weighted_pred_flag;
+    params.pic_param.pic_fields.bits.entropy_coding_mode_flag = pps.entropy_coding_mode_flag ? 1 : 0;
+    params.pic_param.pic_fields.bits.weighted_pred_flag = pps.weighted_pred_flag ? 1 : 0;
     params.pic_param.pic_fields.bits.weighted_bipred_idc = pps.weighted_bipred_idc;
-    params.pic_param.pic_fields.bits.transform_8x8_mode_flag = pps.transform_8x8_mode_flag;
+    params.pic_param.pic_fields.bits.transform_8x8_mode_flag = pps.transform_8x8_mode_flag ? 1 : 0;
     params.pic_param.pic_fields.bits.field_pic_flag = 0;
-    params.pic_param.pic_fields.bits.constrained_intra_pred_flag = pps.constrained_intra_pred_flag;
-    params.pic_param.pic_fields.bits.pic_order_present_flag = pps.bottom_field_pic_order_in_frame_present_flag;
-    params.pic_param.pic_fields.bits.deblocking_filter_control_present_flag = pps.deblocking_filter_control_present_flag;
-    params.pic_param.pic_fields.bits.redundant_pic_cnt_present_flag = pps.redundant_pic_cnt_present_flag;
-    params.pic_param.pic_fields.bits.reference_pic_flag = 1;
+    params.pic_param.pic_fields.bits.constrained_intra_pred_flag = pps.constrained_intra_pred_flag ? 1 : 0;
+    params.pic_param.pic_fields.bits.pic_order_present_flag = pps.bottom_field_pic_order_in_frame_present_flag ? 1 : 0;
+    params.pic_param.pic_fields.bits.deblocking_filter_control_present_flag = pps.deblocking_filter_control_present_flag ? 1 : 0;
+    params.pic_param.pic_fields.bits.redundant_pic_cnt_present_flag = pps.redundant_pic_cnt_present_flag ? 1 : 0;
+    params.pic_param.pic_fields.bits.reference_pic_flag = is_reference_pic ? 1 : 0;
     params.pic_param.frame_num = static_cast<uint16_t>(frame_num);
 
     params.pic_param.CurrPic.picture_id = static_cast<VASurfaceID>(curr_surface);
     params.pic_param.CurrPic.frame_idx = frame_num;
-    params.pic_param.CurrPic.flags = 0;
+    params.pic_param.CurrPic.flags = is_reference_pic ? VA_PICTURE_H264_SHORT_TERM_REFERENCE : 0;
     params.pic_param.CurrPic.TopFieldOrderCnt = poc;
     params.pic_param.CurrPic.BottomFieldOrderCnt = poc;
 
@@ -71,7 +74,7 @@ VaapiH264DecodeParams VaapiH264DecodeParams::build(
     size_t ref_count = 0;
     for (const auto& entry : dpb.entries()) {
         if (ref_count >= 16) break;
-        if (entry.frame.is_hw_frame() && entry.frame.hw_surface_id() != 0 && entry.frame.hw_surface_id() != curr_surface) {
+        if (entry.frame.is_hw_frame() && entry.frame.hw_surface_id() != 0xFFFFFFFF && entry.frame.hw_surface_id() != curr_surface) {
             params.pic_param.ReferenceFrames[ref_count].picture_id = static_cast<VASurfaceID>(entry.frame.hw_surface_id());
             params.pic_param.ReferenceFrames[ref_count].frame_idx = entry.frame_num;
             params.pic_param.ReferenceFrames[ref_count].flags = VA_PICTURE_H264_SHORT_TERM_REFERENCE;
@@ -90,23 +93,107 @@ VaapiH264DecodeParams VaapiH264DecodeParams::build(
         params.slice_param.slice_data_size = static_cast<uint32_t>(slice_data_size);
         params.slice_param.slice_data_offset = 0;
         params.slice_param.slice_data_flag = VA_SLICE_DATA_FLAG_ALL;
+        params.slice_param.slice_data_bit_offset = static_cast<uint16_t>(8 + slice->header_bit_size);
         params.slice_param.first_mb_in_slice = static_cast<uint16_t>(slice->first_mb_in_slice);
         params.slice_param.slice_type = static_cast<uint8_t>(slice->raw_slice_type % 5);
         params.slice_param.direct_spatial_mv_pred_flag = slice->direct_spatial_mv_pred_flag ? 1 : 0;
-        params.slice_param.num_ref_idx_l0_active_minus1 = static_cast<uint8_t>(slice->num_ref_idx_l0_active_minus1);
-        params.slice_param.num_ref_idx_l1_active_minus1 = static_cast<uint8_t>(slice->num_ref_idx_l1_active_minus1);
         params.slice_param.cabac_init_idc = static_cast<uint8_t>(slice->cabac_init_idc);
         params.slice_param.slice_qp_delta = static_cast<int8_t>(slice->slice_qp_delta);
+        params.slice_param.disable_deblocking_filter_idc = slice->disable_deblocking_filter_idc;
+        params.slice_param.slice_alpha_c0_offset_div2 = slice->slice_alpha_c0_offset_div2;
+        params.slice_param.slice_beta_offset_div2 = slice->slice_beta_offset_div2;
+
+        params.slice_param.luma_log2_weight_denom = slice->luma_log2_weight_denom;
+        params.slice_param.chroma_log2_weight_denom = slice->chroma_log2_weight_denom;
+        params.slice_param.luma_weight_l0_flag = slice->luma_weight_l0_flag;
+        params.slice_param.chroma_weight_l0_flag = slice->chroma_weight_l0_flag;
+        std::memcpy(params.slice_param.luma_weight_l0, slice->luma_weight_l0, sizeof(params.slice_param.luma_weight_l0));
+        std::memcpy(params.slice_param.luma_offset_l0, slice->luma_offset_l0, sizeof(params.slice_param.luma_offset_l0));
+        std::memcpy(params.slice_param.chroma_weight_l0, slice->chroma_weight_l0, sizeof(params.slice_param.chroma_weight_l0));
+        std::memcpy(params.slice_param.chroma_offset_l0, slice->chroma_offset_l0, sizeof(params.slice_param.chroma_offset_l0));
+
+        params.slice_param.luma_weight_l1_flag = slice->luma_weight_l1_flag;
+        params.slice_param.chroma_weight_l1_flag = slice->chroma_weight_l1_flag;
+        std::memcpy(params.slice_param.luma_weight_l1, slice->luma_weight_l1, sizeof(params.slice_param.luma_weight_l1));
+        std::memcpy(params.slice_param.luma_offset_l1, slice->luma_offset_l1, sizeof(params.slice_param.luma_offset_l1));
+        std::memcpy(params.slice_param.chroma_weight_l1, slice->chroma_weight_l1, sizeof(params.slice_param.chroma_weight_l1));
+        std::memcpy(params.slice_param.chroma_offset_l1, slice->chroma_offset_l1, sizeof(params.slice_param.chroma_offset_l1));
+
+        // Build RefPicList0 and RefPicList1 according to H.264 POC order
+        std::vector<VAPictureH264> past_refs;
+        std::vector<VAPictureH264> future_refs;
+
+        for (size_t i = 0; i < ref_count; ++i) {
+            const auto& pic = params.pic_param.ReferenceFrames[i];
+            if (pic.picture_id != VA_INVALID_ID) {
+                if (pic.TopFieldOrderCnt < poc) {
+                    past_refs.push_back(pic);
+                } else {
+                    future_refs.push_back(pic);
+                }
+            }
+        }
+
+        // Sort past_refs: descending POC (closest past first)
+        std::sort(past_refs.begin(), past_refs.end(), [](const VAPictureH264& a, const VAPictureH264& b) {
+            return a.TopFieldOrderCnt > b.TopFieldOrderCnt;
+        });
+
+        // Sort future_refs: ascending POC (closest future first)
+        std::sort(future_refs.begin(), future_refs.end(), [](const VAPictureH264& a, const VAPictureH264& b) {
+            return a.TopFieldOrderCnt < b.TopFieldOrderCnt;
+        });
+
+        // RefPicList0: past_refs followed by future_refs
+        std::vector<VAPictureH264> list0 = past_refs;
+        list0.insert(list0.end(), future_refs.begin(), future_refs.end());
+
+        // RefPicList1: future_refs followed by past_refs (B slices only)
+        std::vector<VAPictureH264> list1;
+        if (slice->slice_type == H264SliceType::B) {
+            list1 = future_refs;
+            list1.insert(list1.end(), past_refs.begin(), past_refs.end());
+        }
 
         for (size_t i = 0; i < 32; ++i) {
             params.slice_param.RefPicList0[i].picture_id = VA_INVALID_ID;
             params.slice_param.RefPicList0[i].flags = VA_PICTURE_H264_INVALID;
+            params.slice_param.RefPicList0[i].frame_idx = 0;
+            params.slice_param.RefPicList0[i].TopFieldOrderCnt = 0;
+            params.slice_param.RefPicList0[i].BottomFieldOrderCnt = 0;
+
             params.slice_param.RefPicList1[i].picture_id = VA_INVALID_ID;
             params.slice_param.RefPicList1[i].flags = VA_PICTURE_H264_INVALID;
+            params.slice_param.RefPicList1[i].frame_idx = 0;
+            params.slice_param.RefPicList1[i].TopFieldOrderCnt = 0;
+            params.slice_param.RefPicList1[i].BottomFieldOrderCnt = 0;
         }
 
-        for (size_t i = 0; i < ref_count && i < 32; ++i) {
-            params.slice_param.RefPicList0[i] = params.pic_param.ReferenceFrames[i];
+        for (size_t i = 0; i < list0.size() && i < 32; ++i) {
+            params.slice_param.RefPicList0[i] = list0[i];
+        }
+
+        if (slice->num_ref_idx_active_override_flag) {
+            params.slice_param.num_ref_idx_l0_active_minus1 = static_cast<uint8_t>(slice->num_ref_idx_l0_active_minus1);
+        } else {
+            params.slice_param.num_ref_idx_l0_active_minus1 = list0.empty() ? 0 : static_cast<uint8_t>(
+                std::min(static_cast<uint32_t>(list0.size() - 1), pps.num_ref_idx_l0_default_active_minus1)
+            );
+        }
+
+        if (slice->slice_type == H264SliceType::B) {
+            for (size_t i = 0; i < list1.size() && i < 32; ++i) {
+                params.slice_param.RefPicList1[i] = list1[i];
+            }
+            if (slice->num_ref_idx_active_override_flag) {
+                params.slice_param.num_ref_idx_l1_active_minus1 = static_cast<uint8_t>(slice->num_ref_idx_l1_active_minus1);
+            } else {
+                params.slice_param.num_ref_idx_l1_active_minus1 = list1.empty() ? 0 : static_cast<uint8_t>(
+                    std::min(static_cast<uint32_t>(list1.size() - 1), pps.num_ref_idx_l1_default_active_minus1)
+                );
+            }
+        } else {
+            params.slice_param.num_ref_idx_l1_active_minus1 = 0;
         }
     }
 

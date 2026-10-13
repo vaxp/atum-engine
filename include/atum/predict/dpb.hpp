@@ -39,6 +39,8 @@ public:
     [[nodiscard]] size_t size() const noexcept { return entries_.size(); }
     [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
     [[nodiscard]] const std::vector<DpbEntry>& entries() const noexcept { return entries_; }
+    void set_max_ref_frames(size_t max_refs) noexcept { max_ref_frames_ = max_refs; }
+    [[nodiscard]] size_t max_ref_frames() const noexcept { return max_ref_frames_; }
 
 private:
     size_t max_ref_frames_{16};

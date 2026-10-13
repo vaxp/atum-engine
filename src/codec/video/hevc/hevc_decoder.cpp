@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include "atum/hwaccel/vaapi_device.hpp"
+#include "atum/hwaccel/vaapi_param_builder.hpp"
 
 namespace atum {
 
@@ -127,19 +128,54 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
         VideoFrame frame;
         uint32_t target_surface_id = 0;
 
+        int32_t poc = parser_.last_slice_header().has_value() ?
+                      static_cast<int32_t>(parser_.last_slice_header()->slice_pic_order_cnt_lsb) : static_cast<int32_t>(frame_count_);
+
         if (hw_pipeline_initialized_ && !hw_surfaces_.empty() && hw_device_->type() == HwDeviceType::Vaapi) {
             auto* va = static_cast<VaapiDevice*>(hw_device_.get());
             target_surface_id = hw_surfaces_[current_surface_idx_];
             current_surface_idx_ = (current_surface_idx_ + 1) % hw_surfaces_.size();
 
+            std::vector<uint32_t> buf_ids;
+            auto* sps = parser_.active_sps();
+            auto* pps = parser_.active_pps();
+
+#if defined(ATUM_HAS_VAAPI_HEADERS)
+            if (sps && pps) {
+                auto params = VaapiHevcDecodeParams::build(
+                    *sps,
+                    *pps,
+                    parser_.last_slice_header().has_value() ? &parser_.last_slice_header().value() : nullptr,
+                    target_surface_id,
+                    poc,
+                    dpb_,
+                    packet.size()
+                );
+
+                auto pic_buf = va->create_buffer(hw_context_id_, 0 /* VAPictureParameterBufferType */, sizeof(params.pic_param), 1, &params.pic_param);
+                if (pic_buf.is_ok()) buf_ids.push_back(*pic_buf);
+
+                if (params.has_slice) {
+                    auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
+                    if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+                }
+            }
+#endif
+            // Slice data buffer (VASliceDataBufferType = 5)
+            auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data());
+            if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
+
+            // Hardware Command Submission
             va->begin_picture(hw_context_id_, target_surface_id);
-            uint32_t slice_buf_id = 0;
-            if (va->create_buffer(hw_context_id_, 1 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data()).is_ok()) {
-                va->render_picture(hw_context_id_, &slice_buf_id, 1);
-                va->destroy_buffer(slice_buf_id);
+            if (!buf_ids.empty()) {
+                va->render_picture(hw_context_id_, buf_ids.data(), static_cast<uint32_t>(buf_ids.size()));
             }
             va->end_picture(hw_context_id_);
             va->sync_surface(target_surface_id);
+
+            for (uint32_t b : buf_ids) {
+                va->destroy_buffer(b);
+            }
 
             auto derived = va->derive_surface_to_frame(target_surface_id, w, h);
             if (derived.is_ok()) {
@@ -187,9 +223,6 @@ MediaResult<void> HevcDecoder::send_packet(const Packet& packet) {
                 }
             }
         }
-
-        int32_t poc = parser_.last_slice_header().has_value() ?
-                      static_cast<int32_t>(parser_.last_slice_header()->slice_pic_order_cnt_lsb) : static_cast<int32_t>(frame_count_);
 
         if (is_key) {
             dpb_.clear();

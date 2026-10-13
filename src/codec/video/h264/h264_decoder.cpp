@@ -1,7 +1,9 @@
+#include <iostream>
 #include "atum/codec/video/h264/h264_decoder.hpp"
 #include <algorithm>
 #include <cstring>
 #include "atum/hwaccel/vaapi_device.hpp"
+#include "atum/hwaccel/vaapi_param_builder.hpp"
 
 namespace atum {
 
@@ -92,6 +94,8 @@ MediaResult<void> H264Decoder::send_packet(const Packet& packet) {
     if (packet.empty()) return MediaError::NeedMoreData;
 
     auto data = packet.as_span();
+    std::vector<std::span<const uint8_t>> slice_nal_spans;
+    bool is_ref_picture = false;
 
     if (is_avcc_ && nal_length_size_ > 0) {
         size_t offset = 0;
@@ -111,6 +115,10 @@ MediaResult<void> H264Decoder::send_packet(const Packet& packet) {
                 nal.type = nal_span[0] & 0x1F;
                 nal.payload = nal_span.subspan(1);
                 (void)parser_.parse_nal(nal);
+                if (nal.type == 1 || nal.type == 5) {
+                    slice_nal_spans.push_back(nal_span);
+                    if (nal.ref_idc != 0) is_ref_picture = true;
+                }
             }
             offset += nal_len;
         }
@@ -118,6 +126,10 @@ MediaResult<void> H264Decoder::send_packet(const Packet& packet) {
         auto nals = resilient_parser_.parse_and_recover(data);
         for (const auto& nal : nals) {
             (void)parser_.parse_nal(nal);
+            if (nal.type == 1 || nal.type == 5) {
+                slice_nal_spans.push_back(nal.payload);
+                if (nal.ref_idc != 0) is_ref_picture = true;
+            }
         }
     }
 
@@ -134,23 +146,109 @@ MediaResult<void> H264Decoder::send_packet(const Packet& packet) {
             init_hardware_pipeline(w, h);
         }
 
+        if (const auto* sps = parser_.active_sps()) {
+            dpb_.set_max_ref_frames(sps->max_num_ref_frames);
+        }
+
         VideoFrame frame;
         uint32_t target_surface_id = 0;
 
+        int32_t poc = parser_.last_slice_header().has_value() ?
+                      static_cast<int32_t>(parser_.last_slice_header()->pic_order_cnt_lsb) : static_cast<int32_t>(frame_count_);
+        uint32_t frame_num = parser_.last_slice_header().has_value() ?
+                             parser_.last_slice_header()->frame_num : frame_count_;
+
         if (hw_pipeline_initialized_ && !hw_surfaces_.empty() && hw_device_->type() == HwDeviceType::Vaapi) {
             auto* va = static_cast<VaapiDevice*>(hw_device_.get());
-            target_surface_id = hw_surfaces_[current_surface_idx_];
-            current_surface_idx_ = (current_surface_idx_ + 1) % hw_surfaces_.size();
 
-            // Submit hardware decode task
-            va->begin_picture(hw_context_id_, target_surface_id);
-            uint32_t slice_buf_id = 0;
-            if (va->create_buffer(hw_context_id_, 1 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data()).is_ok()) {
-                va->render_picture(hw_context_id_, &slice_buf_id, 1);
-                va->destroy_buffer(slice_buf_id);
+            // Pick a surface that does not conflict with active reference frames in DPB
+            target_surface_id = hw_surfaces_[current_surface_idx_];
+            for (size_t attempt = 0; attempt < hw_surfaces_.size(); ++attempt) {
+                uint32_t cand = hw_surfaces_[(current_surface_idx_ + attempt) % hw_surfaces_.size()];
+                bool in_dpb = false;
+                for (const auto& entry : dpb_.entries()) {
+                    if (entry.frame.hw_surface_id() == cand) {
+                        in_dpb = true;
+                        break;
+                    }
+                }
+                if (!in_dpb) {
+                    target_surface_id = cand;
+                    current_surface_idx_ = (current_surface_idx_ + attempt + 1) % hw_surfaces_.size();
+                    break;
+                }
             }
-            va->end_picture(hw_context_id_);
-            va->sync_surface(target_surface_id);
+
+            std::vector<uint32_t> buf_ids;
+            auto* sps = parser_.active_sps();
+            auto* pps = parser_.active_pps();
+
+#if defined(ATUM_HAS_VAAPI_HEADERS)
+            if (sps && pps) {
+                size_t first_slice_size = slice_nal_spans.empty() ? packet.size() : slice_nal_spans[0].size();
+                auto params = VaapiH264DecodeParams::build(
+                    *sps,
+                    *pps,
+                    parser_.last_slice_header().has_value() ? &parser_.last_slice_header().value() : nullptr,
+                    target_surface_id,
+                    frame_num,
+                    poc,
+                    dpb_,
+                    first_slice_size,
+                    is_ref_picture
+                );
+
+                auto pic_buf = va->create_buffer(hw_context_id_, 0 /* VAPictureParameterBufferType */, sizeof(params.pic_param), 1, &params.pic_param);
+                if (pic_buf.is_ok()) buf_ids.push_back(*pic_buf);
+
+                auto iq_buf = va->create_buffer(hw_context_id_, 1 /* VAIQMatrixBufferType */, sizeof(params.iq_matrix), 1, &params.iq_matrix);
+                if (iq_buf.is_ok()) buf_ids.push_back(*iq_buf);
+
+                if (!slice_nal_spans.empty()) {
+                    for (const auto& slice_span : slice_nal_spans) {
+                        params.slice_param.slice_data_size = static_cast<uint32_t>(slice_span.size());
+                        params.slice_param.slice_data_offset = 0;
+                        params.slice_param.slice_data_flag = VA_SLICE_DATA_FLAG_ALL;
+                        if (parser_.last_slice_header().has_value()) {
+                            params.slice_param.slice_data_bit_offset = static_cast<uint16_t>(8 + parser_.last_slice_header()->header_bit_size);
+                        }
+
+                        auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
+                        if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+
+                        auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(slice_span.size()), 1, slice_span.data());
+                        if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
+                    }
+                } else if (params.has_slice) {
+                    auto sl_buf = va->create_buffer(hw_context_id_, 4 /* VASliceParameterBufferType */, sizeof(params.slice_param), 1, &params.slice_param);
+                    if (sl_buf.is_ok()) buf_ids.push_back(*sl_buf);
+
+                    auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data());
+                    if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
+                }
+            }
+#endif
+            // Hardware Command Submission
+            auto b_res = va->begin_picture(hw_context_id_, target_surface_id);
+            MediaResult<void> r_res = MediaResult<void>::ok();
+            if (!buf_ids.empty()) {
+                r_res = va->render_picture(hw_context_id_, buf_ids.data(), static_cast<uint32_t>(buf_ids.size()));
+            }
+            auto e_res = va->end_picture(hw_context_id_);
+            auto s_res = va->sync_surface(target_surface_id);
+
+            if (!b_res.is_ok() || !r_res.is_ok() || !e_res.is_ok() || !s_res.is_ok()) {
+                std::cerr << "[VA-API HARDWARE EXECUTION FAILED] frame=" << frame_count_
+                          << " begin=" << (b_res.is_ok() ? "ok" : media_error_to_string(b_res.error()))
+                          << " render=" << (r_res.is_ok() ? "ok" : media_error_to_string(r_res.error()))
+                          << " end=" << (e_res.is_ok() ? "ok" : media_error_to_string(e_res.error()))
+                          << " sync=" << (s_res.is_ok() ? "ok" : media_error_to_string(s_res.error()))
+                          << " bufs=" << buf_ids.size() << std::endl;
+            }
+
+            for (uint32_t b : buf_ids) {
+                va->destroy_buffer(b);
+            }
 
             // Export or derive hardware frame
             auto derived = va->derive_surface_to_frame(target_surface_id, w, h);
@@ -201,11 +299,6 @@ MediaResult<void> H264Decoder::send_packet(const Packet& packet) {
             }
         }
 
-        int32_t poc = parser_.last_slice_header().has_value() ?
-                      static_cast<int32_t>(parser_.last_slice_header()->pic_order_cnt_lsb) : static_cast<int32_t>(frame_count_);
-        uint32_t frame_num = parser_.last_slice_header().has_value() ?
-                             parser_.last_slice_header()->frame_num : frame_count_;
-
         if (error_concealment_enabled_ && resilient_parser_.stats().corrupted_bytes_skipped > 0) {
             damage_mask_ = ErrorConcealmentMask(w, h, 16);
             damage_mask_.mark_damaged(0, 0);
@@ -215,7 +308,9 @@ MediaResult<void> H264Decoder::send_packet(const Packet& packet) {
         if (is_key) {
             dpb_.clear();
         }
-        dpb_.insert(frame.clone(), poc, frame_num, is_key);
+        if (is_ref_picture) {
+            dpb_.insert(frame.clone(), poc, frame_num, is_key);
+        }
 
         ready_frames_.push(std::move(frame));
         frame_count_++;

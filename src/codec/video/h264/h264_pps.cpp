@@ -101,42 +101,38 @@ MediaResult<H264Pps> H264Pps::parse(BitReader& reader) noexcept {
     if (!redundant_pic) return redundant_pic.error();
     pps.redundant_pic_cnt_present_flag = (*redundant_pic != 0);
 
-    if (reader.has_bits(1)) {
+    if (reader.more_rbsp_data()) {
         auto t8x8 = reader.read_bit();
         if (t8x8) {
             pps.transform_8x8_mode_flag = (*t8x8 != 0);
-            if (reader.has_bits(1)) {
-                auto p_scaling = reader.read_bit();
-                if (p_scaling) {
-                    pps.pic_scaling_matrix_present_flag = (*p_scaling != 0);
-                    if (pps.pic_scaling_matrix_present_flag) {
-                        size_t count = 6 + (pps.transform_8x8_mode_flag ? 2 : 0);
-                        for (size_t i = 0; i < count; ++i) {
-                            auto present = reader.read_bit();
-                            if (!present) return present.error();
-                            if (*present != 0) {
-                                size_t size = (i < 6) ? 16 : 64;
-                                int32_t last_scale = 8;
-                                int32_t next_scale = 8;
-                                for (size_t j = 0; j < size; ++j) {
-                                    if (next_scale != 0) {
-                                        auto delta = reader.read_se();
-                                        if (!delta) return delta.error();
-                                        next_scale = (last_scale + *delta + 256) % 256;
-                                    }
-                                    last_scale = (next_scale == 0) ? last_scale : next_scale;
-                                }
+        }
+        auto p_scaling = reader.read_bit();
+        if (p_scaling) {
+            pps.pic_scaling_matrix_present_flag = (*p_scaling != 0);
+            if (pps.pic_scaling_matrix_present_flag) {
+                size_t count = 6 + (pps.transform_8x8_mode_flag ? 2 : 0);
+                for (size_t i = 0; i < count; ++i) {
+                    auto present = reader.read_bit();
+                    if (!present) return present.error();
+                    if (*present != 0) {
+                        size_t size = (i < 6) ? 16 : 64;
+                        int32_t last_scale = 8;
+                        int32_t next_scale = 8;
+                        for (size_t j = 0; j < size; ++j) {
+                            if (next_scale != 0) {
+                                auto delta = reader.read_se();
+                                if (!delta) return delta.error();
+                                next_scale = (last_scale + *delta + 256) % 256;
                             }
-                        }
-                    }
-                    if (reader.has_bits(1)) {
-                        auto sec_chroma = reader.read_se();
-                        if (sec_chroma) {
-                            pps.second_chroma_qp_index_offset = *sec_chroma;
+                            last_scale = (next_scale == 0) ? last_scale : next_scale;
                         }
                     }
                 }
             }
+        }
+        auto sec_chroma = reader.read_se();
+        if (sec_chroma) {
+            pps.second_chroma_qp_index_offset = *sec_chroma;
         }
     }
 

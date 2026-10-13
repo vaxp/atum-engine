@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include "atum/hwaccel/vaapi_device.hpp"
+#include "atum/hwaccel/vaapi_param_builder.hpp"
 
 namespace atum {
 
@@ -108,14 +109,31 @@ MediaResult<void> Av1Decoder::send_packet(const Packet& packet) {
             target_surface_id = hw_surfaces_[current_surface_idx_];
             current_surface_idx_ = (current_surface_idx_ + 1) % hw_surfaces_.size();
 
+            std::vector<uint32_t> buf_ids;
+
+#if defined(ATUM_HAS_VAAPI_HEADERS)
+            const auto& seq = parser_.sequence_header();
+            if (seq.has_value()) {
+                const auto* frame_hdr = parser_.last_frame_header().has_value() ? &parser_.last_frame_header().value() : nullptr;
+                auto params = VaapiAv1DecodeParams::build(*seq, frame_hdr, target_surface_id);
+                auto pic_buf = va->create_buffer(hw_context_id_, 0 /* VAPictureParameterBufferType */, sizeof(params.pic_param), 1, &params.pic_param);
+                if (pic_buf.is_ok()) buf_ids.push_back(*pic_buf);
+            }
+#endif
+            auto data_buf = va->create_buffer(hw_context_id_, 5 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data());
+            if (data_buf.is_ok()) buf_ids.push_back(*data_buf);
+
+            // Hardware Command Submission
             va->begin_picture(hw_context_id_, target_surface_id);
-            uint32_t slice_buf_id = 0;
-            if (va->create_buffer(hw_context_id_, 1 /* VASliceDataBufferType */, static_cast<uint32_t>(packet.size()), 1, packet.data()).is_ok()) {
-                va->render_picture(hw_context_id_, &slice_buf_id, 1);
-                va->destroy_buffer(slice_buf_id);
+            if (!buf_ids.empty()) {
+                va->render_picture(hw_context_id_, buf_ids.data(), static_cast<uint32_t>(buf_ids.size()));
             }
             va->end_picture(hw_context_id_);
             va->sync_surface(target_surface_id);
+
+            for (uint32_t b : buf_ids) {
+                va->destroy_buffer(b);
+            }
 
             auto derived = va->derive_surface_to_frame(target_surface_id, w, h);
             if (derived.is_ok()) {

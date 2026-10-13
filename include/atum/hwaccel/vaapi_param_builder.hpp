@@ -43,7 +43,8 @@ struct VaapiH264DecodeParams {
         uint32_t frame_num,
         int32_t poc,
         const DecodedPictureBuffer& dpb,
-        size_t slice_data_size
+        size_t slice_data_size,
+        bool is_reference_pic = true
     );
 };
 

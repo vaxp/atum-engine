@@ -6,7 +6,8 @@ MediaResult<H264SliceHeader> H264SliceHeader::parse(
     BitReader& reader,
     H264NalType nal_type,
     const H264Sps& sps,
-    const H264Pps& pps) noexcept {
+    const H264Pps& pps,
+    uint8_t nal_ref_idc) noexcept {
 
     H264SliceHeader slice{};
 
@@ -105,6 +106,9 @@ MediaResult<H264SliceHeader> H264SliceHeader::parse(
                 if (!ref_l1) return ref_l1.error();
                 slice.num_ref_idx_l1_active_minus1 = *ref_l1;
             }
+        } else {
+            slice.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
+            slice.num_ref_idx_l1_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
         }
     }
 
@@ -136,31 +140,119 @@ MediaResult<H264SliceHeader> H264SliceHeader::parse(
         }
     }
 
-    // Dec ref pic marking
-    if (nal_type == H264NalType::SliceIdr) {
-        auto no_output = reader.read_bit();
-        if (!no_output) return no_output.error();
-        auto long_term = reader.read_bit();
-        if (!long_term) return long_term.error();
-    } else {
-        auto adaptive = reader.read_bit();
-        if (!adaptive) return adaptive.error();
-        if (*adaptive != 0) {
-            while (true) {
-                auto op = reader.read_ue();
-                if (!op) return op.error();
-                if (*op == 0) break;
-                if (*op == 1 || *op == 3) {
-                    auto diff = reader.read_ue(); if (!diff) return diff.error();
+    // Prediction weight table (7.3.3.2)
+    if ((pps.weighted_pred_flag && (slice.slice_type == H264SliceType::P || slice.slice_type == H264SliceType::SP)) ||
+        (pps.weighted_bipred_idc == 1 && slice.slice_type == H264SliceType::B)) {
+        auto l_denom = reader.read_ue();
+        if (!l_denom) return l_denom.error();
+        slice.luma_log2_weight_denom = static_cast<uint8_t>(*l_denom);
+
+        if (sps.chroma_format_idc != 0) {
+            auto c_denom = reader.read_ue();
+            if (!c_denom) return c_denom.error();
+            slice.chroma_log2_weight_denom = static_cast<uint8_t>(*c_denom);
+        }
+
+        uint32_t num_l0 = slice.num_ref_idx_l0_active_minus1 + 1;
+        for (uint32_t i = 0; i < num_l0 && i < 32; ++i) {
+            auto l_flag = reader.read_bit();
+            if (!l_flag) return l_flag.error();
+            if (*l_flag) {
+                slice.luma_weight_l0_flag = 1;
+                auto lw = reader.read_se(); if (!lw) return lw.error();
+                auto lo = reader.read_se(); if (!lo) return lo.error();
+                slice.luma_weight_l0[i] = static_cast<int16_t>(*lw);
+                slice.luma_offset_l0[i] = static_cast<int16_t>(*lo);
+            } else {
+                slice.luma_weight_l0[i] = static_cast<int16_t>(1 << slice.luma_log2_weight_denom);
+                slice.luma_offset_l0[i] = 0;
+            }
+
+            if (sps.chroma_format_idc != 0) {
+                auto c_flag = reader.read_bit();
+                if (!c_flag) return c_flag.error();
+                if (*c_flag) {
+                    slice.chroma_weight_l0_flag = 1;
+                    for (int j = 0; j < 2; ++j) {
+                        auto cw = reader.read_se(); if (!cw) return cw.error();
+                        auto co = reader.read_se(); if (!co) return co.error();
+                        slice.chroma_weight_l0[i][j] = static_cast<int16_t>(*cw);
+                        slice.chroma_offset_l0[i][j] = static_cast<int16_t>(*co);
+                    }
+                } else {
+                    for (int j = 0; j < 2; ++j) {
+                        slice.chroma_weight_l0[i][j] = static_cast<int16_t>(1 << slice.chroma_log2_weight_denom);
+                        slice.chroma_offset_l0[i][j] = 0;
+                    }
                 }
-                if (*op == 2) {
-                    auto ltf = reader.read_ue(); if (!ltf) return ltf.error();
+            }
+        }
+
+        if (slice.slice_type == H264SliceType::B) {
+            uint32_t num_l1 = slice.num_ref_idx_l1_active_minus1 + 1;
+            for (uint32_t i = 0; i < num_l1 && i < 32; ++i) {
+                auto l_flag = reader.read_bit();
+                if (!l_flag) return l_flag.error();
+                if (*l_flag) {
+                    slice.luma_weight_l1_flag = 1;
+                    auto lw = reader.read_se(); if (!lw) return lw.error();
+                    auto lo = reader.read_se(); if (!lo) return lo.error();
+                    slice.luma_weight_l1[i] = static_cast<int16_t>(*lw);
+                    slice.luma_offset_l1[i] = static_cast<int16_t>(*lo);
+                } else {
+                    slice.luma_weight_l1[i] = static_cast<int16_t>(1 << slice.luma_log2_weight_denom);
+                    slice.luma_offset_l1[i] = 0;
                 }
-                if (*op == 3 || *op == 6) {
-                    auto max_lt = reader.read_ue(); if (!max_lt) return max_lt.error();
+
+                if (sps.chroma_format_idc != 0) {
+                    auto c_flag = reader.read_bit();
+                    if (!c_flag) return c_flag.error();
+                    if (*c_flag) {
+                        slice.chroma_weight_l1_flag = 1;
+                        for (int j = 0; j < 2; ++j) {
+                            auto cw = reader.read_se(); if (!cw) return cw.error();
+                            auto co = reader.read_se(); if (!co) return co.error();
+                            slice.chroma_weight_l1[i][j] = static_cast<int16_t>(*cw);
+                            slice.chroma_offset_l1[i][j] = static_cast<int16_t>(*co);
+                        }
+                    } else {
+                        for (int j = 0; j < 2; ++j) {
+                            slice.chroma_weight_l1[i][j] = static_cast<int16_t>(1 << slice.chroma_log2_weight_denom);
+                            slice.chroma_offset_l1[i][j] = 0;
+                        }
+                    }
                 }
-                if (*op == 4) {
-                    auto max_num = reader.read_ue(); if (!max_num) return max_num.error();
+            }
+        }
+    }
+
+    // Dec ref pic marking (7.3.3.3)
+    if (nal_ref_idc != 0) {
+        if (nal_type == H264NalType::SliceIdr) {
+            auto no_output = reader.read_bit();
+            if (!no_output) return no_output.error();
+            auto long_term = reader.read_bit();
+            if (!long_term) return long_term.error();
+        } else {
+            auto adaptive = reader.read_bit();
+            if (!adaptive) return adaptive.error();
+            if (*adaptive != 0) {
+                while (true) {
+                    auto op = reader.read_ue();
+                    if (!op) return op.error();
+                    if (*op == 0) break;
+                    if (*op == 1 || *op == 3) {
+                        auto diff = reader.read_ue(); if (!diff) return diff.error();
+                    }
+                    if (*op == 2) {
+                        auto ltf = reader.read_ue(); if (!ltf) return ltf.error();
+                    }
+                    if (*op == 3 || *op == 6) {
+                        auto max_lt = reader.read_ue(); if (!max_lt) return max_lt.error();
+                    }
+                    if (*op == 4) {
+                        auto max_num = reader.read_ue(); if (!max_num) return max_num.error();
+                    }
                 }
             }
         }
@@ -177,6 +269,23 @@ MediaResult<H264SliceHeader> H264SliceHeader::parse(
     auto qp_delta = reader.read_se();
     if (!qp_delta) return qp_delta.error();
     slice.slice_qp_delta = *qp_delta;
+
+    if (pps.deblocking_filter_control_present_flag) {
+        auto disable_db = reader.read_ue();
+        if (!disable_db) return disable_db.error();
+        slice.disable_deblocking_filter_idc = static_cast<uint8_t>(*disable_db);
+        if (slice.disable_deblocking_filter_idc != 1) {
+            auto alpha = reader.read_se();
+            if (!alpha) return alpha.error();
+            slice.slice_alpha_c0_offset_div2 = static_cast<int8_t>(*alpha);
+
+            auto beta = reader.read_se();
+            if (!beta) return beta.error();
+            slice.slice_beta_offset_div2 = static_cast<int8_t>(*beta);
+        }
+    }
+
+    slice.header_bit_size = static_cast<uint32_t>(reader.bits_read());
 
     return slice;
 }

@@ -124,7 +124,7 @@ MediaResult<void> H264Parser::parse_nal(const NalUnit& nal) {
         }
 
         BitReader reader(rbsp_payload);
-        auto slice_res = H264SliceHeader::parse(reader, nal_type, *sps, *pps);
+        auto slice_res = H264SliceHeader::parse(reader, nal_type, *sps, *pps, nal.ref_idc);
         if (slice_res) {
             if (slice_res->pic_parameter_set_id != pps->pic_parameter_set_id) {
                 auto it = pps_map_.find(slice_res->pic_parameter_set_id);

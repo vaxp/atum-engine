@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include "atum/hwaccel/vaapi_encoder.hpp"
+#include "atum/codec/video/h264/h264_decoder.hpp"
 #include "atum/codec/codec_registry.hpp"
 
 using namespace atum;
@@ -76,6 +77,7 @@ void test_vaapi_encoder_execution() {
     }
 
     // Encode 5 frames
+    Packet first_packet;
     for (uint32_t f = 0; f < 5; ++f) {
         frame.set_pts(f * 33333);
         frame.set_dts(f * 33333);
@@ -91,6 +93,7 @@ void test_vaapi_encoder_execution() {
 
         if (f == 0) {
             assert(pkt.is_keyframe());
+            first_packet = pkt;
         }
 
         std::cout << "  -> Encoded frame " << f
@@ -100,6 +103,31 @@ void test_vaapi_encoder_execution() {
     }
 
     assert(encoder.flush().is_ok());
+
+    // Test Hardware Video Decode of the generated hardware bitstream
+    if (!first_packet.empty()) {
+        std::cout << "  -> Testing Hardware Video Decoder with generated packet..." << std::endl;
+        H264Decoder decoder;
+        CodecParameters dec_params{};
+        dec_params.codec_id = CodecId::H264;
+        dec_params.width = 320;
+        dec_params.height = 240;
+        assert(decoder.init(dec_params).is_ok());
+
+        auto dec_send_res = decoder.send_packet(first_packet);
+        if (dec_send_res.is_ok()) {
+            VideoFrame dec_frame;
+            auto dec_recv_res = decoder.receive_frame(dec_frame);
+            if (dec_recv_res.is_ok()) {
+                assert(dec_frame.is_valid());
+                std::cout << "  -> Successfully Decoded Hardware Frame: "
+                          << dec_frame.width() << "x" << dec_frame.height()
+                          << " | is_hw_frame: " << (dec_frame.is_hw_frame() ? "YES" : "NO")
+                          << " | surface_id: " << dec_frame.hw_surface_id() << std::endl;
+            }
+        }
+    }
+
     std::cout << "  -> Passed!" << std::endl;
 }
 

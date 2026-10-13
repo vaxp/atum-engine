@@ -44,6 +44,7 @@ typedef VAStatus (*FnVaSyncSurface)(VADisplay dpy, VASurfaceID render_target);
 typedef VAStatus (*FnVaDeriveImage)(VADisplay dpy, VASurfaceID surface, VAImage* image);
 typedef VAStatus (*FnVaDestroyImage)(VADisplay dpy, VAImageID image);
 typedef VAStatus (*FnVaCreateImage)(VADisplay dpy, VAImageFormat* format, int width, int height, VAImage* image);
+typedef VAStatus (*FnVaGetImage)(VADisplay dpy, VASurfaceID surface, int x, int y, unsigned int width, unsigned int height, VAImageID image);
 typedef VAStatus (*FnVaPutImage)(VADisplay dpy, VASurfaceID surface, VAImageID image, int src_x, int src_y, unsigned int src_width, unsigned int src_height, int dest_x, int dest_y, unsigned int dest_width, unsigned int dest_height);
 typedef VAStatus (*FnVaMapBuffer)(VADisplay dpy, VABufferID buf_id, void** pbuf);
 typedef VAStatus (*FnVaUnmapBuffer)(VADisplay dpy, VABufferID buf_id);
@@ -71,6 +72,7 @@ struct VaSymbols {
     FnVaDeriveImage vaDeriveImage{nullptr};
     FnVaDestroyImage vaDestroyImage{nullptr};
     FnVaCreateImage vaCreateImage{nullptr};
+    FnVaGetImage vaGetImage{nullptr};
     FnVaPutImage vaPutImage{nullptr};
     FnVaMapBuffer vaMapBuffer{nullptr};
     FnVaUnmapBuffer vaUnmapBuffer{nullptr};
@@ -100,6 +102,7 @@ struct VaSymbols {
         vaDeriveImage = reinterpret_cast<FnVaDeriveImage>(dlsym(libva, "vaDeriveImage"));
         vaDestroyImage = reinterpret_cast<FnVaDestroyImage>(dlsym(libva, "vaDestroyImage"));
         vaCreateImage = reinterpret_cast<FnVaCreateImage>(dlsym(libva, "vaCreateImage"));
+        vaGetImage = reinterpret_cast<FnVaGetImage>(dlsym(libva, "vaGetImage"));
         vaPutImage = reinterpret_cast<FnVaPutImage>(dlsym(libva, "vaPutImage"));
         vaMapBuffer = reinterpret_cast<FnVaMapBuffer>(dlsym(libva, "vaMapBuffer"));
         vaUnmapBuffer = reinterpret_cast<FnVaUnmapBuffer>(dlsym(libva, "vaUnmapBuffer"));
@@ -623,7 +626,11 @@ MediaResult<void> VaapiDevice::sync_surface(uint32_t surface_id) {
     if (!is_available() || !g_va_syms.vaSyncSurface) return MediaError::HardwareError;
     VADisplay dpy = reinterpret_cast<VADisplay>(va_display_);
     VAStatus st = g_va_syms.vaSyncSurface(dpy, static_cast<VASurfaceID>(surface_id));
-    if (st != VA_STATUS_SUCCESS) return MediaError::HardwareError;
+    if (st != VA_STATUS_SUCCESS) {
+        std::cerr << "vaSyncSurface failed on surface " << surface_id << ": " << st << " ("
+                  << (g_va_syms.vaErrorStr ? g_va_syms.vaErrorStr(st) : "unknown") << ")" << std::endl;
+        return MediaError::HardwareError;
+    }
     return MediaResult<void>::ok();
 #else
     (void)surface_id;
@@ -633,7 +640,7 @@ MediaResult<void> VaapiDevice::sync_surface(uint32_t surface_id) {
 
 MediaResult<void> VaapiDevice::export_surface_dma_buf(uint32_t surface_id, HwBufferDescriptor& desc) {
 #if defined(NISABA_HAS_VAAPI_HEADERS)
-    if (!is_available() || surface_id == 0) return MediaError::InvalidData;
+    if (!is_available() || surface_id == 0xFFFFFFFF) return MediaError::InvalidData;
     VADisplay dpy = reinterpret_cast<VADisplay>(va_display_);
 
     if (g_va_syms.vaExportSurfaceHandle) {
@@ -677,12 +684,55 @@ MediaResult<void> VaapiDevice::export_surface_dma_buf(uint32_t surface_id, HwBuf
 }
 
 MediaResult<VideoFrame> VaapiDevice::derive_surface_to_frame(uint32_t surface_id, uint32_t width, uint32_t height) {
-    if (!is_available() || surface_id == 0) return MediaError::InvalidData;
+    if (!is_available() || surface_id == 0xFFFFFFFF) return MediaError::InvalidData;
 
 #if defined(NISABA_HAS_VAAPI_HEADERS)
     VADisplay dpy = reinterpret_cast<VADisplay>(va_display_);
 
-    if (g_va_syms.vaDeriveImage && g_va_syms.vaMapBuffer && g_va_syms.vaUnmapBuffer && g_va_syms.vaDestroyImage) {
+    bool got_pixels = false;
+    VideoFrame frame;
+
+    // Strategy 1: vaGetImage (hardware driver untiles GPU surface into clean linear memory)
+    if (!got_pixels && g_va_syms.vaCreateImage && g_va_syms.vaGetImage && g_va_syms.vaMapBuffer && g_va_syms.vaUnmapBuffer && g_va_syms.vaDestroyImage) {
+        VAImageFormat img_fmt{};
+        img_fmt.fourcc = VA_FOURCC_NV12;
+        img_fmt.byte_order = VA_LSB_FIRST;
+        img_fmt.bits_per_pixel = 12;
+
+        VAImage img{};
+        VAStatus st = g_va_syms.vaCreateImage(dpy, &img_fmt, width, height, &img);
+        if (st == VA_STATUS_SUCCESS) {
+            st = g_va_syms.vaGetImage(dpy, static_cast<VASurfaceID>(surface_id), 0, 0, width, height, img.image_id);
+            if (st == VA_STATUS_SUCCESS) {
+                void* pbuf = nullptr;
+                st = g_va_syms.vaMapBuffer(dpy, img.buf, &pbuf);
+                if (st == VA_STATUS_SUCCESS && pbuf) {
+                    frame = VideoFrame::allocate(width, height, PixelFormat::NV12);
+                    uint8_t* src_base = reinterpret_cast<uint8_t*>(pbuf);
+
+                    for (uint32_t i = 0; i < img.num_planes && i < frame.plane_count(); ++i) {
+                        const uint8_t* src_plane = src_base + img.offsets[i];
+                        uint8_t* dst_plane = frame.plane_mut(i);
+                        size_t src_stride = img.pitches[i];
+                        size_t dst_stride = frame.stride(i);
+                        uint32_t plane_h = frame.plane_height(i);
+                        size_t copy_bytes = std::min(src_stride, dst_stride);
+
+                        for (uint32_t y = 0; y < plane_h; ++y) {
+                            std::memcpy(dst_plane + y * dst_stride, src_plane + y * src_stride, copy_bytes);
+                        }
+                    }
+
+                    g_va_syms.vaUnmapBuffer(dpy, img.buf);
+                    got_pixels = true;
+                }
+            }
+            g_va_syms.vaDestroyImage(dpy, img.image_id);
+        }
+    }
+
+    // Strategy 2: Fast direct derivation fallback
+    if (!got_pixels && g_va_syms.vaDeriveImage && g_va_syms.vaMapBuffer && g_va_syms.vaUnmapBuffer && g_va_syms.vaDestroyImage) {
         VAImage image{};
         VAStatus st = g_va_syms.vaDeriveImage(dpy, static_cast<VASurfaceID>(surface_id), &image);
         if (st == VA_STATUS_SUCCESS) {
@@ -693,7 +743,7 @@ MediaResult<VideoFrame> VaapiDevice::derive_surface_to_frame(uint32_t surface_id
                 if (image.format.fourcc == VA_FOURCC_YV12) fmt = PixelFormat::YUV420P;
                 else if (image.format.fourcc == VA_FOURCC_P010) fmt = PixelFormat::P010;
 
-                VideoFrame frame = VideoFrame::allocate(width, height, fmt);
+                frame = VideoFrame::allocate(width, height, fmt);
                 uint8_t* src_base = reinterpret_cast<uint8_t*>(pbuf);
 
                 for (uint32_t i = 0; i < image.num_planes && i < frame.plane_count(); ++i) {
@@ -711,22 +761,18 @@ MediaResult<VideoFrame> VaapiDevice::derive_surface_to_frame(uint32_t surface_id
 
                 g_va_syms.vaUnmapBuffer(dpy, image.buf);
                 g_va_syms.vaDestroyImage(dpy, image.image_id);
-
-                frame.set_hw_frame(true);
-                frame.set_hw_surface_id(surface_id);
-
-                HwBufferDescriptor desc{};
-                if (export_surface_dma_buf(surface_id, desc).is_ok()) {
-                    frame.set_dma_buf_fd(desc.fds[0]);
-                }
-                return frame;
+                got_pixels = true;
+            } else {
+                g_va_syms.vaDestroyImage(dpy, image.image_id);
             }
-            g_va_syms.vaDestroyImage(dpy, image.image_id);
         }
     }
 
-    // Direct hardware-backed frame descriptor
-    VideoFrame frame = VideoFrame::allocate(width, height, PixelFormat::NV12);
+    if (!got_pixels) {
+        // Direct hardware-backed frame descriptor
+        frame = VideoFrame::allocate(width, height, PixelFormat::NV12);
+    }
+
     frame.set_hw_frame(true);
     frame.set_hw_surface_id(surface_id);
 

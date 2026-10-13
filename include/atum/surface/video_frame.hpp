@@ -104,7 +104,7 @@ public:
     void set_hw_frame(bool hw) noexcept { is_hw_frame_ = hw; }
 
     [[nodiscard]] uint32_t hw_surface_id() const noexcept { return hw_surface_id_; }
-    void set_hw_surface_id(uint32_t id) noexcept { hw_surface_id_ = id; if (id != 0) is_hw_frame_ = true; }
+    void set_hw_surface_id(uint32_t id) noexcept { hw_surface_id_ = id; if (id != 0xFFFFFFFF) is_hw_frame_ = true; }
 
     [[nodiscard]] int32_t dma_buf_fd() const noexcept { return dma_buf_fd_; }
     void set_dma_buf_fd(int32_t fd) noexcept { dma_buf_fd_ = fd; if (fd >= 0) is_hw_frame_ = true; }
@@ -124,7 +124,7 @@ private:
     bool is_owned_{false};
 
     bool is_hw_frame_{false};
-    uint32_t hw_surface_id_{0};
+    uint32_t hw_surface_id_{0xFFFFFFFF};
     int32_t dma_buf_fd_{-1};
 };
 
