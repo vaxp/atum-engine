@@ -80,16 +80,25 @@ atum_media_sources = files(
   'src/resilience/temporal_concealment.cpp',
   'src/resilience/resilient_nal_parser.cpp',
   'src/resilience/error_concealer.cpp',
+  'src/hwaccel/vulkan/vulkan_dispatcher.cpp',
+  'src/hwaccel/vulkan/vulkan_device.cpp',
+  'src/hwaccel/vulkan/vulkan_image_importer.cpp',
+  'src/hwaccel/vulkan/vulkan_video_session.cpp',
+  'src/hwaccel/vulkan/vulkan_video_decoder.cpp',
 )
+
+dl_dep = meson.get_compiler('cpp').find_library('dl', required : false)
 
 atum_media_lib = both_libraries('atum_media',
   atum_media_sources,
   include_directories : atum_media_inc,
+  dependencies : dl_dep,
   install : true
 )
 
 atum_media_dep = declare_dependency(
   include_directories : atum_media_inc,
+  dependencies : dl_dep,
   link_with : atum_media_lib.get_static_lib()
 )
 

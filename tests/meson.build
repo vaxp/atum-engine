@@ -31,6 +31,8 @@ test_cases = [
   'hw_param_builder',
   'vaapi_encoder',
   'real_assets',
+  'vulkan_interop',
+  'vulkan_visual_verify',
 ]
 
 foreach t : test_cases

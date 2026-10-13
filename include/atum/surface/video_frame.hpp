@@ -109,6 +109,9 @@ public:
     [[nodiscard]] int32_t dma_buf_fd() const noexcept { return dma_buf_fd_; }
     void set_dma_buf_fd(int32_t fd) noexcept { dma_buf_fd_ = fd; if (fd >= 0) is_hw_frame_ = true; }
 
+    [[nodiscard]] uint64_t hw_opaque_handle() const noexcept { return hw_opaque_handle_; }
+    void set_hw_opaque_handle(uint64_t handle) noexcept { hw_opaque_handle_ = handle; if (handle != 0) is_hw_frame_ = true; }
+
 private:
     uint32_t width_{0};
     uint32_t height_{0};
@@ -126,6 +129,7 @@ private:
     bool is_hw_frame_{false};
     uint32_t hw_surface_id_{0xFFFFFFFF};
     int32_t dma_buf_fd_{-1};
+    uint64_t hw_opaque_handle_{0};
 };
 
 } // namespace atum

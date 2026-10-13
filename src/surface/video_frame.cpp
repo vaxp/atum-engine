@@ -28,6 +28,7 @@ VideoFrame::VideoFrame(const VideoFrame& other)
     is_hw_frame_ = other.is_hw_frame_;
     hw_surface_id_ = other.hw_surface_id_;
     dma_buf_fd_ = other.dma_buf_fd_;
+    hw_opaque_handle_ = other.hw_opaque_handle_;
 
     if (other.is_owned_) {
         owned_buffer_ = other.owned_buffer_;
@@ -67,6 +68,7 @@ VideoFrame& VideoFrame::operator=(const VideoFrame& other) {
     is_hw_frame_ = other.is_hw_frame_;
     hw_surface_id_ = other.hw_surface_id_;
     dma_buf_fd_ = other.dma_buf_fd_;
+    hw_opaque_handle_ = other.hw_opaque_handle_;
 
     if (other.is_owned_) {
         owned_buffer_ = other.owned_buffer_;

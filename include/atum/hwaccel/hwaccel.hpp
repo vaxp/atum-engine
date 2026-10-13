@@ -18,6 +18,7 @@ enum class HwDeviceType : uint8_t {
     V4l2M2m,             ///< Video4Linux2 Memory-to-Memory (Embedded / Raspberry Pi / NXP)
     Nvdec,               ///< NVIDIA Hardware Decoder
     AndroidMediaCodec,   ///< Android NDK AHardwareBuffer & MediaCodec
+    Vulkan,              ///< Vulkan Graphics Interop & Vulkan Video (Cross-Platform)
 };
 
 constexpr std::string_view hw_device_type_to_string(HwDeviceType type) noexcept {
@@ -27,6 +28,7 @@ constexpr std::string_view hw_device_type_to_string(HwDeviceType type) noexcept 
         case HwDeviceType::V4l2M2m:           return "V4L2 M2M";
         case HwDeviceType::Nvdec:             return "NVDEC";
         case HwDeviceType::AndroidMediaCodec: return "Android MediaCodec";
+        case HwDeviceType::Vulkan:            return "Vulkan";
         default:                              return "Software Fallback";
     }
 }
